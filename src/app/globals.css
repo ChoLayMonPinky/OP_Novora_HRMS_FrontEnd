@@ -1,0 +1,1819 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-inter), "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-novora: #2f66e0;
+  --color-novora-deep: #2557cb;
+  --color-novora-sky: #0a9cf5;
+  --color-novora-amber: #f59e0b;
+  --color-novora-ink: #0f172a;
+  --color-novora-muted: #64748b;
+  --color-novora-surface: #f8fafc;
+  --color-novora-border: #f1f5f9;
+}
+
+html {
+  color-scheme: light;
+  scroll-behavior: smooth;
+
+  --shell-surface: #f8fafc;
+  --shell-content-from: #f8fafc;
+  --shell-content-to: #f8fafc;
+  --shell-topbar-bg: #ffffff;
+  --shell-topbar-border: #f1f5f9;
+  --shell-title: #0f172a;
+  --shell-muted: #64748b;
+
+  --sidebar-bg: #ffffff;
+  --sidebar-border: #f1f5f9;
+  --sidebar-text: #475569;
+  --sidebar-text-hover: #0f172a;
+  --sidebar-text-active: #ffffff;
+  --sidebar-icon-active: #ffffff;
+  --sidebar-item-hover-bg: #f8fafc;
+  --sidebar-item-active-bg: var(--color-novora);
+  --sidebar-muted: #94a3b8;
+  --sidebar-input-bg: #f8fafc;
+  --sidebar-input-border: #f1f5f9;
+  --sidebar-dropdown-bg: #ffffff;
+  --sidebar-footer-bg: #f0f5ff;
+  --sidebar-footer-border: #dce7ff;
+  --sidebar-sub-active-bg: color-mix(in srgb, var(--color-novora) 10%, white);
+  --sidebar-sub-active-text: var(--color-novora-deep);
+  --sidebar-help-icon: var(--color-novora);
+}
+
+html[data-theme='minimal-off-white'] {
+  --shell-surface: #fafaf9;
+  --shell-content-from: #fafaf9;
+  --shell-content-to: #ffffff;
+  --sidebar-bg: #fafaf9;
+  --sidebar-border: #e7e5e4;
+  --sidebar-item-hover-bg: #f5f5f4;
+  --sidebar-input-bg: #ffffff;
+  --sidebar-footer-bg: #ffffff;
+}
+
+html[data-theme='cyber-dark'] {
+  color-scheme: dark;
+
+  --shell-surface: #0b1120;
+  --shell-content-from: #0f172a;
+  --shell-content-to: #1e293b;
+  --shell-topbar-bg: rgba(15, 23, 42, 0.92);
+  --shell-topbar-border: rgba(51, 65, 85, 0.75);
+  --shell-title: #f8fafc;
+  --shell-muted: #94a3b8;
+  --color-novora-ink: #e2e8f0;
+  --color-novora-surface: #0b1120;
+  --color-novora-border: rgba(51, 65, 85, 0.8);
+
+  --sidebar-bg: #020617;
+  --sidebar-border: rgba(30, 41, 59, 0.8);
+  --sidebar-text: #94a3b8;
+  --sidebar-text-hover: #f1f5f9;
+  --sidebar-text-active: #ffffff;
+  --sidebar-icon-active: #ffffff;
+  --sidebar-item-hover-bg: rgba(255, 255, 255, 0.05);
+  --sidebar-item-active-bg: var(--color-novora);
+  --sidebar-muted: #64748b;
+  --sidebar-input-bg: rgba(15, 23, 42, 0.8);
+  --sidebar-input-border: #334155;
+  --sidebar-dropdown-bg: #0f172a;
+  --sidebar-footer-bg: rgba(15, 23, 42, 0.6);
+  --sidebar-footer-border: rgba(30, 41, 59, 0.8);
+  --sidebar-sub-active-bg: color-mix(in srgb, var(--color-novora) 15%, #0f172a);
+  --sidebar-sub-active-text: #bae6fd;
+  --sidebar-help-icon: #7dd3fc;
+}
+
+html[data-theme='emerald-forest'] {
+  --shell-surface: #ecfdf5;
+  --shell-content-from: #f0fdf4;
+  --shell-content-to: #ffffff;
+  --shell-topbar-bg: color-mix(in srgb, #ecfdf5 90%, white);
+  --shell-topbar-border: #bbf7d0;
+
+  --sidebar-bg: #f0fdf4;
+  --sidebar-border: #bbf7d0;
+  --sidebar-text: #4b5563;
+  --sidebar-text-hover: #14532d;
+  --sidebar-item-hover-bg: #dcfce7;
+  --sidebar-input-bg: #ffffff;
+  --sidebar-input-border: #bbf7d0;
+  --sidebar-dropdown-bg: #ffffff;
+  --sidebar-footer-bg: #ecfdf5;
+  --sidebar-footer-border: #bbf7d0;
+  --sidebar-sub-active-bg: color-mix(in srgb, var(--color-novora) 12%, #ecfdf5);
+  --sidebar-sub-active-text: #047857;
+  --sidebar-help-icon: #059669;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--shell-surface);
+  color: var(--color-novora-ink);
+  transition: background-color 420ms ease, color 420ms ease;
+}
+
+#novora-hrms-root {
+  background-color: var(--shell-surface);
+  transition: background-color 420ms ease;
+}
+
+#app-topbar {
+  background: var(--shell-topbar-bg);
+  border-bottom: 1px solid var(--shell-topbar-border);
+  transition: background 420ms ease, border-color 420ms ease;
+}
+
+#topbar-section-title {
+  color: var(--shell-title);
+}
+
+#portal-inner-board {
+  background: linear-gradient(to bottom, var(--shell-content-from), var(--shell-content-to));
+  transition: background 420ms ease;
+}
+
+html[data-theme='cyber-dark'] .nv-card,
+html[data-theme='cyber-dark'] .nv-panel,
+html[data-theme='cyber-dark'] .nv-stat-card {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: var(--color-novora-border);
+  color: var(--color-novora-ink);
+}
+
+html[data-theme='cyber-dark'] .nv-toolbar {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+html[data-theme='cyber-dark'] .nv-btn-secondary {
+  background: rgba(15, 23, 42, 0.6);
+  border-color: var(--color-novora-border);
+  color: var(--color-novora-ink);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-novora) 18%, white);
+  color: var(--color-novora-ink);
+}
+
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-novora) 55%, white);
+  outline-offset: 2px;
+}
+
+@keyframes soft-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-soft-fade-up {
+  animation: soft-fade-up 320ms ease-out both;
+}
+
+@keyframes sidebar-slide-in {
+  from {
+    opacity: 0;
+    max-height: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    max-height: 400px;
+    transform: translateY(0);
+  }
+}
+
+@keyframes sidebar-brand-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes portal-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-sidebar-brand-in {
+  animation: sidebar-brand-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-portal-content-in {
+  animation: portal-content-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Used widely by module roots (Tailwind-like aliases) */
+.animate-in {
+  animation-fill-mode: both;
+}
+.fade-in {
+  animation-name: soft-fade-up;
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+.duration-200 {
+  animation-duration: 200ms;
+}
+.duration-300 {
+  animation-duration: 300ms;
+}
+
+#app-sidebar,
+.nv-sidebar-shell {
+  transition:
+    width 280ms cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 420ms ease,
+    border-color 420ms ease;
+}
+
+.nv-sidebar-shell {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+}
+
+.nv-sidebar-shell--expanded {
+  width: 17rem;
+}
+
+.nv-sidebar-shell--rail {
+  width: 4.25rem;
+}
+
+/* Hover labels for the icon rail (rendered via portal; keep a class hook for theme). */
+.nv-sidebar-tooltip {
+  animation: nv-sidebar-tip-in 140ms ease-out;
+}
+
+@keyframes nv-sidebar-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+
+.nv-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 4rem;
+  padding: 0 1rem 0 1.5rem;
+  border-bottom: 1px solid var(--sidebar-border);
+  flex-shrink: 0;
+}
+
+.nv-sidebar-shell--rail .nv-sidebar-header {
+  flex-direction: column;
+  justify-content: center;
+  height: auto;
+  padding: 0.875rem 0.5rem;
+  gap: 0.625rem;
+}
+
+.nv-sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--sidebar-input-border);
+  color: var(--sidebar-text);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 180ms ease, color 180ms ease, transform 180ms ease;
+  flex-shrink: 0;
+}
+
+.nv-sidebar-toggle:hover {
+  background: var(--sidebar-item-hover-bg);
+  color: var(--sidebar-text-hover);
+}
+
+.nv-sidebar-search-wrap {
+  position: relative;
+  margin: 0.75rem 0.75rem 0.5rem;
+  flex-shrink: 0;
+}
+
+.nv-sidebar-search-icon {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--sidebar-muted);
+  pointer-events: none;
+}
+
+.nv-sidebar-search-input {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--sidebar-input-border);
+  background: var(--sidebar-input-bg);
+  padding: 0.5rem 0.75rem 0.5rem 2.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--sidebar-text-hover);
+  outline: none;
+  transition: border-color 180ms ease, background 180ms ease;
+}
+
+.nv-sidebar-search-input::placeholder {
+  color: var(--sidebar-muted);
+}
+
+.nv-sidebar-search-input:focus {
+  border-color: var(--color-novora);
+  background: var(--sidebar-bg);
+}
+
+.nv-sidebar-nav {
+  padding: 1rem;
+}
+
+.nv-sidebar-section-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.nv-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-align: left;
+  color: var(--sidebar-text);
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    border-color 160ms ease;
+}
+
+.nv-sidebar-link:hover {
+  background: var(--sidebar-item-hover-bg);
+  color: var(--sidebar-text-hover);
+}
+
+.nv-sidebar-link--rail {
+  justify-content: center;
+  padding: 0;
+  width: 2.5rem;
+  min-height: 2.5rem;
+  margin-inline: auto;
+}
+
+.nv-sidebar-link-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--sidebar-muted);
+  transition: color 160ms ease;
+}
+
+.nv-sidebar-link:hover .nv-sidebar-link-icon {
+  color: var(--sidebar-text-hover);
+}
+
+.nv-sidebar-link--active,
+.nv-sidebar-link--active:hover {
+  background: var(--sidebar-item-active-bg);
+  color: var(--sidebar-text-active);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+}
+
+.nv-sidebar-link--active .nv-sidebar-link-icon,
+.nv-sidebar-link--active:hover .nv-sidebar-link-icon {
+  color: var(--sidebar-icon-active);
+}
+
+.nv-sidebar-footer {
+  padding: 1rem;
+  border-top: 1px solid var(--sidebar-border);
+  flex-shrink: 0;
+}
+
+/* Settings mode: blue module switcher button + grouped settings list (old Novora layout). */
+.nv-sidebar-mode-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  background: var(--color-novora);
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.nv-sidebar-mode-btn:hover {
+  background: var(--color-novora-deep);
+}
+
+.nv-sidebar-group-label {
+  padding: 0 0.75rem;
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sidebar-muted);
+}
+
+.nv-sidebar-sublink {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  border-left: 2px solid transparent;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-align: left;
+  color: var(--sidebar-text);
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.nv-sidebar-sublink:hover {
+  background: var(--sidebar-item-hover-bg);
+  color: var(--sidebar-text-hover);
+}
+
+.nv-sidebar-sublink--active,
+.nv-sidebar-sublink--active:hover {
+  background: var(--sidebar-sub-active-bg);
+  color: var(--sidebar-sub-active-text);
+  border-left-color: color-mix(in srgb, var(--color-novora) 80%, transparent);
+  font-weight: 700;
+}
+
+.nv-sidebar-footer-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-inline: auto;
+  border-radius: 0.75rem;
+  border: 1px solid var(--sidebar-input-border);
+  color: var(--sidebar-help-icon);
+  background: var(--sidebar-sub-active-bg);
+  cursor: pointer;
+  transition: background-color 180ms ease, transform 180ms ease;
+}
+
+.nv-sidebar-footer-btn:hover {
+  background: var(--sidebar-item-hover-bg);
+  transform: scale(1.03);
+}
+
+.nv-sidebar-help {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--sidebar-footer-border);
+  background: var(--sidebar-footer-bg);
+  overflow: hidden;
+  cursor: pointer;
+  transition: filter 180ms ease;
+}
+
+.nv-sidebar-help:hover {
+  filter: brightness(0.97);
+}
+
+.nv-sidebar-help::after {
+  content: '';
+  position: absolute;
+  right: -1rem;
+  bottom: -1rem;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-novora) 10%, transparent);
+  transition: transform 220ms ease;
+}
+
+.nv-sidebar-help:hover::after {
+  transform: scale(1.1);
+}
+
+.nv-sidebar-help-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+  color: var(--sidebar-help-icon);
+}
+
+/* The expanded sidebar shows the settings menu itself; the in-page copy is only for the icon rail. */
+#novora-hrms-root:has(#app-sidebar[data-collapsed='false']) .nv-settings-subnav {
+  display: none;
+}
+
+.nv-settings-subnav-item[data-active='true'],
+.nv-settings-subnav-item.bg-novora\/10 {
+  box-shadow: inset 2px 0 0 var(--color-novora);
+}
+
+/* Legacy aliases kept for any straggler usage */
+.nv-sidebar-nav-btn {
+  position: relative;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+.nv-sidebar-nav-btn-active {
+  background: var(--sidebar-item-active-bg);
+  color: var(--sidebar-text-active);
+  font-weight: 700;
+}
+
+.nv-sidebar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.625rem;
+  border: 1px solid var(--sidebar-input-border);
+  color: var(--sidebar-text);
+  background: transparent;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+  cursor: pointer;
+}
+
+.nv-sidebar-icon-btn:hover {
+  background: var(--sidebar-item-hover-bg);
+  color: var(--sidebar-text-hover);
+}
+
+html[data-density='compact'] #portal-inner-board {
+  padding: 1rem 1.25rem;
+}
+
+html[data-density='cozy'] #portal-inner-board {
+  padding: 1.5rem 2rem;
+}
+
+html[data-density='spacious'] #portal-inner-board {
+  padding: 1.75rem 2.5rem;
+}
+
+@keyframes mesh-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(2%, -1%) scale(1.02); }
+}
+
+.animate-mesh-drift {
+  animation: mesh-drift 18s ease-in-out infinite;
+}
+
+.nv-page-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-novora-ink);
+}
+
+.nv-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.75rem;
+  background: var(--color-novora);
+  color: white;
+  font-weight: 700;
+  font-size: 0.75rem;
+  padding: 0.625rem 1.125rem;
+  transition: background-color 150ms ease, opacity 150ms ease;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.05);
+}
+
+.nv-btn-primary:hover {
+  background: var(--color-novora-deep);
+}
+
+.nv-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+  background: white;
+  color: #334155;
+  font-weight: 700;
+  font-size: 0.75rem;
+  padding: 0.625rem 1rem;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.nv-btn-secondary:hover {
+  border-color: color-mix(in srgb, var(--color-novora) 35%, var(--color-novora-border));
+  background: color-mix(in srgb, var(--color-novora) 4%, white);
+}
+
+.nv-glass {
+  background: color-mix(in srgb, white 82%, transparent);
+  backdrop-filter: blur(16px);
+  border: 1px solid color-mix(in srgb, white 60%, var(--color-novora-border));
+}
+
+.nv-card {
+  border-radius: 1rem;
+  border: 1px solid var(--color-novora-border);
+  background: white;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.05);
+  transition: border-color 200ms ease;
+}
+
+.nv-card:hover {
+  border-color: #e2e8f0;
+}
+
+.nv-input {
+  width: 100%;
+  border-radius: 0.875rem;
+  border: 1px solid var(--color-novora-border);
+  background: white;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-novora-ink);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.nv-input::placeholder {
+  color: #94a3b8;
+}
+
+.nv-input:hover {
+  border-color: #cbd5e1;
+}
+
+.nv-input:focus {
+  border-color: var(--color-novora);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-novora) 14%, transparent);
+  outline: none;
+}
+
+.nv-search-wrap {
+  position: relative;
+}
+
+.nv-search-wrap .nv-search-icon {
+  position: absolute;
+  left: 0.875rem;
+  top: 50%;
+  z-index: 1;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: #94a3b8;
+  transition: color 200ms ease, transform 200ms ease;
+}
+
+.nv-search-input {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--color-novora-border);
+  background: #f8fafc;
+  padding: 0.375rem 1rem 0.375rem 2.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-novora-ink);
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+
+.nv-search-input::placeholder {
+  color: #94a3b8;
+}
+
+.nv-search-input:hover {
+  border-color: #cbd5e1;
+  background: #fafafa;
+}
+
+.nv-search-wrap:focus-within .nv-search-icon {
+  color: var(--color-novora);
+  transform: translateY(-50%) scale(1.05);
+}
+
+.nv-search-wrap:focus-within .nv-search-input {
+  border-color: var(--color-novora);
+  background: white;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-novora) 12%, transparent);
+  outline: none;
+}
+
+html[data-theme='cyber-dark'] .nv-search-input {
+  background: rgba(15, 23, 42, 0.85);
+  border-color: var(--color-novora-border);
+  color: var(--color-novora-ink);
+}
+
+html[data-theme='cyber-dark'] .nv-search-input::placeholder {
+  color: #64748b;
+}
+
+html[data-theme='cyber-dark'] .nv-search-input:hover,
+html[data-theme='cyber-dark'] .nv-search-wrap:focus-within .nv-search-input {
+  background: rgba(15, 23, 42, 0.95);
+  color: var(--color-novora-ink);
+}
+
+/* Dropdown / select chevron spacing */
+.nv-chevron-down,
+.nv-chevron-icon {
+  flex-shrink: 0;
+  color: #94a3b8;
+  display: block;
+}
+
+.nv-chevron-down--sm {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.nv-chevron-down--md {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.nv-chevron-down--lg {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Shared toolbar dropdown trigger — keeps icon/label/chevron evenly spaced */
+.nv-dd-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  height: 2.25rem;
+  padding: 0 0.8rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--color-novora-border);
+  background: #fff;
+  color: #334155;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 0 1px 1px color-mix(in srgb, var(--color-novora-ink) 3%, transparent);
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease;
+}
+
+.nv-dd-trigger:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--color-novora-ink) 5%, transparent);
+}
+
+.nv-dd-trigger:focus-visible {
+  outline: none;
+  border-color: var(--color-novora);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-novora) 14%, transparent);
+}
+
+.nv-dd-trigger[aria-expanded='true'],
+.nv-dd-trigger.nv-dd-trigger--open {
+  border-color: color-mix(in srgb, var(--color-novora) 40%, #e2e8f0);
+  background: color-mix(in srgb, var(--color-novora) 6%, #fff);
+  color: var(--color-novora-deep);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-novora) 10%, transparent);
+}
+
+.nv-dd-trigger > svg,
+.nv-dd-trigger > .nv-chevron-down,
+.nv-dd-trigger > .lucide {
+  flex-shrink: 0;
+}
+
+.nv-dd-trigger > .nv-chevron-down,
+.nv-dd-trigger > .lucide-chevron-down {
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), color 160ms ease;
+}
+
+.nv-dd-trigger[aria-expanded='true'] > .nv-chevron-down,
+.nv-dd-trigger.nv-dd-trigger--open > .nv-chevron-down,
+.nv-dd-trigger[aria-expanded='true'] > .lucide-chevron-down,
+.nv-dd-trigger.nv-dd-trigger--open > .lucide-chevron-down {
+  transform: rotate(180deg);
+  color: var(--color-novora);
+}
+
+.nv-dd-trigger > span {
+  display: inline-block;
+  line-height: 1.25;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Compact export / secondary toolbar actions */
+.nv-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  height: 2.25rem;
+  padding: 0 0.875rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--color-novora-border);
+  background: #fff;
+  color: #334155;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 0 1px 1px color-mix(in srgb, var(--color-novora-ink) 3%, transparent);
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease;
+}
+
+.nv-toolbar-btn:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--color-novora-ink) 5%, transparent);
+}
+
+.nv-toolbar-btn:focus-visible {
+  outline: none;
+  border-color: var(--color-novora);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-novora) 14%, transparent);
+}
+
+.nv-toolbar-btn > svg {
+  flex-shrink: 0;
+  color: #94a3b8;
+  transition: color 160ms ease;
+}
+
+.nv-toolbar-btn:hover > svg {
+  color: var(--color-novora);
+}
+
+.nv-trailing-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 0.25rem 0.625rem;
+}
+
+/* Custom dropdown anchor */
+.nv-dropdown-anchor,
+.nv-dd-anchor {
+  position: relative;
+  display: block;
+  overflow: visible;
+  max-width: 100%;
+}
+
+.nv-dropdown-anchor.w-auto,
+.nv-dropdown-anchor.shrink-0,
+.nv-dd-anchor {
+  display: inline-block;
+  width: auto;
+  vertical-align: middle;
+}
+
+.nv-dropdown-anchor.w-full {
+  display: block;
+  width: 100%;
+}
+
+.nv-dropdown-panel,
+.nv-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  z-index: 60;
+  margin-top: 0;
+}
+
+.nv-dropdown-panel {
+  left: 0;
+  right: 0;
+}
+
+/* Unified menu surface — works even when callers still pass bg/border/shadow utilities */
+.nv-dropdown-menu {
+  min-width: 100%;
+  padding: 0.375rem;
+  border-radius: 0.875rem;
+  border: 1px solid var(--color-novora-border) !important;
+  background: #fff !important;
+  box-shadow:
+    0 4px 6px color-mix(in srgb, var(--color-novora-ink) 4%, transparent),
+    0 14px 36px color-mix(in srgb, var(--color-novora-ink) 10%, transparent) !important;
+  overflow-x: hidden;
+  overflow-y: auto;
+  animation: nv-dropdown-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.nv-dropdown-menu > button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.55rem;
+  padding: 0.5rem 0.7rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.nv-dropdown-menu > button:hover {
+  background: color-mix(in srgb, var(--color-novora) 7%, #f8fafc) !important;
+  color: var(--color-novora-deep) !important;
+}
+
+.nv-dropdown-menu > button[aria-selected='true'],
+.nv-dropdown-menu > button.nv-dropdown-item--active {
+  background: color-mix(in srgb, var(--color-novora) 10%, white);
+  color: var(--color-novora-deep);
+  font-weight: 700;
+}
+
+.nv-dropdown-menu > .border-b,
+.nv-dropdown-menu > [class*='border-b'] {
+  margin-bottom: 0.25rem;
+  padding-bottom: 0.35rem;
+}
+
+/* Portaled menus: positioning handled by DropdownAnchor / SelectMenu */
+.nv-dropdown-portal {
+  filter: drop-shadow(0 12px 28px color-mix(in srgb, var(--color-novora-ink) 12%, transparent));
+  transform-origin: top center;
+  animation: nv-dropdown-portal-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 0.875rem;
+}
+
+.nv-dropdown-portal--up {
+  transform-origin: bottom center;
+  animation-name: nv-dropdown-portal-in-up;
+}
+
+.nv-dropdown-portal .nv-dropdown-menu,
+.nv-dropdown-portal .nv-dropdown-panel {
+  position: static !important;
+  top: auto !important;
+  right: auto !important;
+  left: auto !important;
+  z-index: auto;
+  min-width: 100%;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  animation: none;
+  filter: none;
+  box-shadow: none !important;
+  overflow: visible;
+}
+
+@keyframes nv-dropdown-portal-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes nv-dropdown-portal-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.nv-dropdown-in {
+  animation: nv-dropdown-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.nv-dropdown-in--up {
+  animation: nv-dropdown-in-up 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.nv-dropdown-menu--right {
+  right: 0;
+  left: auto;
+}
+
+.nv-dropdown-menu--left {
+  left: 0;
+  right: auto;
+}
+
+.nv-dropdown-panel--align-right {
+  left: auto;
+  right: 0;
+  min-width: 100%;
+  width: max-content;
+}
+
+/* Custom select menu (replaces native select — panel opens below, not over trigger) */
+.nv-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.8rem;
+  border-radius: 0.875rem;
+  border: 1px solid var(--color-novora-border);
+  background: white;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-novora-ink);
+  cursor: pointer;
+  box-shadow: 0 1px 1px color-mix(in srgb, var(--color-novora-ink) 2.5%, transparent);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.nv-select-trigger:hover:not(:disabled) {
+  border-color: #cbd5e1;
+  background: #fcfdff;
+}
+
+.nv-select-trigger--open,
+.nv-select-trigger:focus-visible {
+  border-color: var(--color-novora);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-novora) 12%, transparent);
+  outline: none;
+  background: #fff;
+}
+
+.nv-select-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.nv-select-trigger-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.nv-select-trigger-chevron {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex-shrink: 0;
+  color: #94a3b8;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), color 160ms ease;
+}
+
+.nv-select-trigger--open .nv-select-trigger-chevron {
+  color: var(--color-novora);
+  transform: rotate(180deg);
+}
+
+.nv-select-panel {
+  list-style: none;
+  margin: 0;
+  padding: 0.375rem;
+  border-radius: 0.875rem;
+  border: 1px solid var(--color-novora-border);
+  background: white;
+  box-shadow:
+    0 4px 6px color-mix(in srgb, var(--color-novora-ink) 4%, transparent),
+    0 14px 36px color-mix(in srgb, var(--color-novora-ink) 10%, transparent);
+  max-height: 16rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+  animation: nv-dropdown-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.nv-select-option {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.55rem;
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.55rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #475569;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 130ms ease, color 130ms ease;
+}
+
+.nv-select-option-icon {
+  display: flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.nv-select-option-icon svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.nv-select-option:hover,
+.nv-select-option--highlight {
+  background: color-mix(in srgb, var(--color-novora) 7%, #f8fafc);
+  color: var(--color-novora-deep);
+}
+
+.nv-select-option--active {
+  background: color-mix(in srgb, var(--color-novora) 12%, white);
+  color: var(--color-novora-deep);
+  font-weight: 700;
+}
+
+.nv-select-option--active:hover {
+  background: color-mix(in srgb, var(--color-novora) 16%, white);
+  color: var(--color-novora-deep);
+}
+
+.nv-select-option--active .nv-select-option-icon {
+  color: var(--color-novora);
+}
+
+@keyframes nv-dropdown-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes nv-dropdown-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.nv-ai-panel {
+  animation: nv-ai-panel-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes nv-ai-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nv-select-wrap {
+  position: relative;
+}
+
+.nv-select-wrap select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-inline-end: 2rem !important;
+  background-image: none !important;
+}
+
+.nv-select-chevron {
+  pointer-events: none;
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+}
+
+/*
+ * Native <select> — clean closed-state chrome for remaining CRUD forms.
+ * Prefer SelectMenu in new work; this keeps natives usable until migrated.
+ */
+#novora-hrms-root select:not([multiple]):not([size]) {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-inline-end: 1.85rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--color-novora-border);
+  background-color: #ffffff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 0.875rem 0.875rem;
+  color: #334155;
+  line-height: 1.3;
+  cursor: pointer;
+  box-shadow: 0 1px 1px color-mix(in srgb, var(--color-novora-ink) 2.5%, transparent);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+#novora-hrms-root select:not([multiple]):not([size]):hover {
+  border-color: #cbd5e1;
+  background-color: #fcfdff;
+}
+
+#novora-hrms-root select:not([multiple]):not([size]):focus,
+#novora-hrms-root select:not([multiple]):not([size]):focus-visible {
+  outline: none;
+  border-color: var(--color-novora);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-novora) 12%, transparent);
+}
+
+#novora-hrms-root .nv-select-wrap select {
+  background-image: none !important;
+  padding-inline-end: 0.75rem;
+}
+
+#novora-hrms-root select:not([multiple]):not([size]):disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  background-color: #f8fafc;
+}
+
+/* Form fields — readable height without crushing compact chips */
+#novora-hrms-root select.w-full:not([multiple]):not([size]) {
+  min-height: 2.5rem;
+  padding-block: 0.55rem;
+  padding-inline-start: 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+#novora-hrms-root select.h-9:not([multiple]):not([size]),
+#novora-hrms-root select.h-8:not([multiple]):not([size]) {
+  min-height: 2.25rem;
+  height: 2.25rem;
+  padding-block: 0;
+  padding-inline-start: 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+#novora-hrms-root select.h-8:not([multiple]):not([size]) {
+  min-height: 2rem;
+  height: 2rem;
+}
+
+/* Modal / CRUD surfaces: keep selects readable and above clipped parents when using SelectMenu */
+#novora-hrms-root [class*='fixed'][class*='inset-0'] select:not([multiple]):not([size]),
+#novora-hrms-root .nv-modal select:not([multiple]):not([size]) {
+  min-height: 2.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding-block: 0.55rem;
+  padding-inline-start: 0.875rem;
+}
+
+html[data-theme='cyber-dark'] #novora-hrms-root select:not([multiple]):not([size]) {
+  background-color: rgba(15, 23, 42, 0.92) !important;
+  border-color: var(--color-novora-border);
+  color: var(--color-novora-ink);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+html[data-theme='cyber-dark'] .nv-dd-trigger,
+html[data-theme='cyber-dark'] .nv-toolbar-btn,
+html[data-theme='cyber-dark'] .nv-select-trigger,
+html[data-theme='cyber-dark'] .nv-dropdown-menu,
+html[data-theme='cyber-dark'] .nv-select-panel {
+  background: rgba(15, 23, 42, 0.96) !important;
+  border-color: var(--color-novora-border) !important;
+  color: var(--color-novora-ink);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35) !important;
+}
+
+html[data-theme='cyber-dark'] .nv-dropdown-menu > button,
+html[data-theme='cyber-dark'] .nv-select-option {
+  color: #cbd5e1;
+}
+
+html[data-theme='cyber-dark'] .nv-dropdown-menu > button:hover,
+html[data-theme='cyber-dark'] .nv-select-option:hover,
+html[data-theme='cyber-dark'] .nv-select-option--highlight {
+  background: color-mix(in srgb, var(--color-novora) 18%, #0f172a) !important;
+  color: #fff !important;
+}
+
+html[data-theme='cyber-dark'] .nv-select-option--active,
+html[data-theme='cyber-dark'] .nv-dropdown-menu > button.nv-dropdown-item--active {
+  background: color-mix(in srgb, var(--color-novora) 22%, #0f172a);
+  color: #fff;
+}
+
+/* Compact toolbar SelectMenu trigger (employee / period chips) */
+.nv-select-trigger.nv-select-trigger--toolbar {
+  min-height: 2.25rem;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-radius: 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  width: auto;
+  min-width: 9.5rem;
+  max-width: 16rem;
+}
+
+.nv-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--color-novora) 12%, var(--color-novora-border));
+  background: color-mix(in srgb, var(--color-novora) 6%, white);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-novora-deep);
+}
+
+/* HR module surfaces inside the authenticated portal */
+#portal-inner-board {
+  color: var(--color-novora-ink);
+  padding: 1.25rem 2rem;
+}
+
+.nv-panel {
+  border-radius: 1.25rem;
+  border: 1px solid var(--color-novora-border);
+  background: white;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-novora-ink) 3%, transparent);
+}
+
+.nv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+
+.nv-stat-card {
+  border-radius: 1.25rem;
+  border: 1px solid var(--color-novora-border);
+  background: #ffffff;
+  padding: 1.05rem 1.1rem;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.05);
+  transition: border-color 180ms ease;
+}
+
+.nv-stat-card:hover {
+  border-color: #e2e8f0;
+}
+
+.nv-stat-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.875rem;
+  background: color-mix(in srgb, var(--color-novora) 10%, white);
+  color: var(--color-novora-deep);
+  padding: 0.5rem;
+}
+
+.nv-tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.nv-tab {
+  border-radius: 0.875rem;
+  padding: 0.625rem 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #475569;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.nv-tab:hover {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.nv-tab-active {
+  background: color-mix(in srgb, var(--color-novora) 10%, white);
+  color: var(--color-novora-deep);
+}
+
+#portal-inner-board input:not([type='checkbox']):not([type='radio']),
+#portal-inner-board select,
+#portal-inner-board textarea {
+  border-radius: 0.875rem;
+  border-color: var(--color-novora-border);
+}
+
+#portal-inner-board input:not([type='checkbox']):not([type='radio']):focus,
+#portal-inner-board select:focus,
+#portal-inner-board textarea:focus {
+  border-color: var(--color-novora);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-novora) 12%, transparent);
+}
+
+#portal-inner-board button.bg-novora,
+#portal-inner-board .nv-btn-primary {
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+[id$="-upper-actions"],
+[id$="-top-controls"],
+#performance-filters,
+#payroll-global-ctrls,
+#employees-top-controls {
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+[id$="-upper-actions"] > *,
+[id$="-top-controls"] > *,
+#performance-filters > *,
+#payroll-global-ctrls > *,
+#employees-top-controls > * {
+  flex-shrink: 0;
+}
+
+[id$="-upper-actions"] button,
+[id$="-upper-actions"] select,
+[id$="-top-controls"] button,
+[id$="-top-controls"] select,
+#performance-filters button,
+#performance-filters select,
+#payroll-global-ctrls button,
+#payroll-global-ctrls select,
+#employees-top-controls button,
+#employees-top-controls select {
+  white-space: nowrap !important;
+  flex-shrink: 0;
+}
+
+/* —— Module chrome (shared across tabs) —— */
+.nv-module-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem 1.25rem;
+  margin-bottom: 1.35rem;
+  padding-bottom: 0.15rem;
+}
+
+.nv-module-header__title {
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--color-novora-ink);
+  line-height: 1.15;
+}
+
+.nv-module-header__desc {
+  margin-top: 0.35rem;
+  max-width: 42rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--shell-muted);
+}
+
+.nv-module-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nv-table-shell {
+  overflow: hidden;
+  border-radius: 1.25rem;
+  border: 1px solid var(--color-novora-border);
+  background: white;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-novora-ink) 3%, transparent);
+}
+
+.nv-table-shell table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.nv-table-shell thead th {
+  padding: 0.85rem 1.1rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7b8a9a;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--color-novora-border);
+  text-align: left;
+}
+
+.nv-table-shell tbody td {
+  padding: 0.9rem 1.1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #334155;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.nv-table-shell tbody tr {
+  transition: background-color 140ms ease;
+}
+
+.nv-table-shell tbody tr:hover {
+  background: color-mix(in srgb, var(--color-novora) 4%, white);
+}
+
+.nv-table-shell tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.nv-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  border-radius: 1.25rem;
+  border: 1px dashed color-mix(in srgb, var(--color-novora) 22%, var(--color-novora-border));
+  background:
+    radial-gradient(ellipse 60% 80% at 50% 0%, color-mix(in srgb, var(--color-novora) 6%, transparent), transparent),
+    #fbfdff;
+}
+
+.nv-empty__title {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--color-novora-ink);
+}
+
+.nv-empty__desc {
+  max-width: 22rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--shell-muted);
+}
+
+.nv-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 0.5rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.nv-badge--success {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+
+.nv-badge--warn {
+  background: #fffbeb;
+  color: #b45309;
+  border-color: #fde68a;
+}
+
+.nv-badge--info {
+  background: color-mix(in srgb, var(--color-novora) 8%, white);
+  color: var(--color-novora-deep);
+  border-color: color-mix(in srgb, var(--color-novora) 18%, white);
+}
+
+.nv-badge--neutral {
+  background: #f8fafc;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+.nv-dash-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.5rem;
+  border: 1px solid var(--color-novora-border);
+  background:
+    radial-gradient(ellipse 80% 120% at -10% 0%, color-mix(in srgb, var(--color-novora) 16%, transparent), transparent 55%),
+    radial-gradient(ellipse 60% 80% at 110% 20%, color-mix(in srgb, var(--color-novora-sky) 14%, transparent), transparent 50%),
+    linear-gradient(135deg, #0b1220 0%, #13233f 55%, #0f1b33 100%);
+  color: white;
+  padding: 1.5rem 1.75rem;
+  box-shadow: 0 16px 40px color-mix(in srgb, #0b1220 18%, transparent);
+}
+
+.nv-dash-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 36px 36px;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.nv-dash-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes nv-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nv-stagger > * {
+  animation: nv-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.nv-stagger > *:nth-child(1) { animation-delay: 40ms; }
+.nv-stagger > *:nth-child(2) { animation-delay: 90ms; }
+.nv-stagger > *:nth-child(3) { animation-delay: 140ms; }
+.nv-stagger > *:nth-child(4) { animation-delay: 190ms; }
+.nv-stagger > *:nth-child(5) { animation-delay: 240ms; }
+.nv-stagger > *:nth-child(6) { animation-delay: 290ms; }
+.nv-stagger > *:nth-child(7) { animation-delay: 340ms; }
+.nv-stagger > *:nth-child(8) { animation-delay: 390ms; }
+
+.nv-ai-panel {
+  border-color: color-mix(in srgb, var(--color-novora) 22%, var(--color-novora-border));
+  background:
+    radial-gradient(ellipse 80% 120% at 0% 0%, color-mix(in srgb, var(--color-novora) 8%, transparent), transparent 55%),
+    color-mix(in srgb, white 94%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-portal-content-in,
+  .animate-soft-fade-up,
+  .animate-in,
+  .fade-in,
+  .nv-stagger > *,
+  .nv-dropdown-portal,
+  .nv-dropdown-in,
+  .nv-dropdown-in--up,
+  .nv-ai-panel,
+  .nv-select-panel {
+    animation: none !important;
+  }
+}
+
+/* Keep module action rows flush with the page — no frosted white toolbar shells. */
+#portal-inner-board .nv-toolbar,
+#portal-inner-board [id$='-top-controls'],
+#portal-inner-board [id$='-upper-actions'],
+#portal-inner-board #performance-module-navigator,
+#portal-inner-board #payroll-global-ctrls {
+  background: transparent;
+  backdrop-filter: none;
+  border: none;
+  box-shadow: none;
+}
+
+html[data-theme='cyber-dark'] .nv-dash-hero {
+  background:
+    radial-gradient(ellipse 80% 120% at -10% 0%, rgba(37, 99, 235, 0.35), transparent 55%),
+    linear-gradient(135deg, #020617 0%, #0f172a 100%);
+}
+
+html[data-theme='cyber-dark'] .nv-module-header__title {
+  color: var(--shell-title);
+}
+
+html[data-theme='cyber-dark'] .nv-table-shell,
+html[data-theme='cyber-dark'] .nv-empty {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: var(--color-novora-border);
+}

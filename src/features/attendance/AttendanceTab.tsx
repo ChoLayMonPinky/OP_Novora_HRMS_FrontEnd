@@ -1,0 +1,2844 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { createLocalId } from '@/lib/createLocalId'
+import {
+  Clock,
+  User,
+  Calendar,
+  Search,
+  Plus,
+  FileSpreadsheet,
+  FileText,
+  Check,
+  Edit2,
+  Trash2,
+  Filter,
+  CheckCircle2,
+  AlertCircle,
+  HelpCircle,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  UserCheck,
+  UserX,
+  PlusCircle,
+  Settings,
+  X,
+  Network,
+} from 'lucide-react';
+import {
+  ApiError,
+  adminAttendancePunch,
+  checkInAttendance,
+  checkOutAttendance,
+  createOvertimeRecord,
+  createRosterEntry,
+  createShiftPattern,
+  decideOvertimeRecord,
+  fetchAttendanceRoster,
+  fetchAttendanceToday,
+  fetchMyAttendance,
+  fetchOtPolicies,
+  fetchOvertimeRecords,
+  fetchRoster,
+  fetchShiftPatterns,
+  type AttendanceLog,
+  type AttendanceRosterLog,
+  type AttendanceTodayRow,
+  type OtPolicyRow,
+  type OvertimeRecordRow,
+  type RosterEntryRow,
+  type ShiftPatternRow,
+} from '@/services'
+import type { Employee } from '@/types'
+import ModuleHeader from '@/components/ui/ModuleHeader'
+import { DropdownAnchor, SelectMenu} from '@/components/ui'
+
+interface AttendanceTabProps {
+  addToast: (text: string, type: 'success' | 'loading' | 'error' | 'info') => void
+  employees?: Employee[]
+}
+
+type RosterDayCell = { time: string; status: string; half?: boolean }
+type RosterEmployee = {
+  id: string
+  name: string
+  initials: string
+  dept: string
+  schedule: {
+    Mon: RosterDayCell
+    Tue: RosterDayCell
+    Wed: RosterDayCell
+    Thu: RosterDayCell
+    Fri: RosterDayCell
+    Sat: RosterDayCell
+    Sun: RosterDayCell
+  }
+}
+
+type ShiftPatternUi = {
+  id?: string
+  name: string
+  activeOnly: boolean
+  data: {
+    hours: string
+    breakTime: string
+    nearestIn: string
+    nearestOut: string
+    allowInOT: string
+    allowOutOT: string
+    nightShift: string
+    employees: number | string
+  }
+}
+
+function formatShiftClock(raw: string) {
+  const m = raw.match(/(\d{1,2}):(\d{2})(?::\d{2})?/)
+  if (!m) return raw
+  return `${m[1].padStart(2, '0')}:${m[2]}`
+}
+
+function mapShiftPatternRow(row: ShiftPatternRow): ShiftPatternUi {
+  const start = formatShiftClock(row.startTime)
+  const end = formatShiftClock(row.endTime)
+  const startHour = Number(start.slice(0, 2))
+  const endHour = Number(end.slice(0, 2))
+  const night = !Number.isNaN(startHour) && !Number.isNaN(endHour) && (startHour >= 18 || endHour < startHour)
+  return {
+    id: row.id,
+    name: row.name,
+    activeOnly: row.active,
+    data: {
+      hours: `${start} - ${end}`,
+      breakTime: row.breakMins > 0 ? `${row.breakMins} mins` : '—',
+      nearestIn: '—',
+      nearestOut: '—',
+      allowInOT: '—',
+      allowOutOT: '—',
+      nightShift: night ? 'Yes' : 'No',
+      employees: 0,
+    },
+  }
+}
+
+function initialsFromName(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((p) => p[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || '??'
+}
+
+function startOfWeek(date: Date): Date {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+  return d
+}
+
+function addDays(date: Date, days: number): Date {
+  const d = new Date(date)
+  d.setDate(d.getDate() + days)
+  return d
+}
+
+function localIsoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function currentMonthRange(): { start: string; end: string } {
+  const now = new Date()
+  const fmt = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  return {
+    start: fmt(new Date(now.getFullYear(), now.getMonth(), 1)),
+    end: fmt(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+  }
+}
+
+function parseLocalDate(value: string): Date {
+  const [y, m, d] = value.slice(0, 10).split('-').map(Number)
+  return y && m && d ? new Date(y, m - 1, d) : new Date(value)
+}
+
+function mapRosterEntries(entries: RosterEntryRow[], weekStart?: Date): RosterEmployee[] {
+  const dayKeys = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+  const byEmp = new Map<string, RosterEmployee>()
+  const weekEnd = weekStart ? addDays(weekStart, 7) : null
+
+  for (const entry of entries) {
+    let emp = byEmp.get(entry.employeeId)
+    if (!emp) {
+      emp = {
+        id: entry.employeeId,
+        name: entry.employeeName || entry.employeeId,
+        initials: initialsFromName(entry.employeeName || entry.employeeId),
+        dept: '—',
+        schedule: {
+          Mon: { time: 'Off', status: 'Off' },
+          Tue: { time: 'Off', status: 'Off' },
+          Wed: { time: 'Off', status: 'Off' },
+          Thu: { time: 'Off', status: 'Off' },
+          Fri: { time: 'Off', status: 'Off' },
+          Sat: { time: 'Off', status: 'Off' },
+          Sun: { time: 'Off', status: 'Off' },
+        },
+      }
+      byEmp.set(entry.employeeId, emp)
+    }
+    const d = parseLocalDate(entry.workDate)
+    if (Number.isNaN(d.getTime())) continue
+    if (weekStart && weekEnd && (d < weekStart || d >= weekEnd)) continue
+    const key = dayKeys[d.getDay()] as keyof RosterEmployee['schedule']
+    const statusUpper = (entry.status || 'PLANNED').toUpperCase()
+    let status = 'Planned'
+    if (statusUpper.includes('LEAVE')) status = 'On leave'
+    else if (statusUpper.includes('ABSENT')) status = 'Absent'
+    else if (statusUpper.includes('COMPLETE')) status = 'Completed'
+    else if (statusUpper.includes('NIGHT')) status = 'Night'
+    else if (statusUpper.includes('OFF')) status = 'Off'
+    emp.schedule[key] = {
+      time: entry.shiftPatternName || entry.status || 'Shift',
+      status,
+    }
+  }
+
+  return Array.from(byEmp.values())
+}
+
+function formatRosterPunch(iso: string | null | undefined) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) {
+    const m = iso.match(/(\d{1,2}:\d{2})/)
+    return m ? m[1] : iso
+  }
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function mapAttendanceToTimesheet(log: AttendanceRosterLog, directory: EmployeeDirectory) {
+  const person = directory.get(log.employeeId)
+  return {
+    id: log.id,
+    name: person?.name || log.employeeId,
+    dept: person?.dept || '—',
+    shift: log.status || 'Standard',
+    start: log.workDate,
+    end: log.workDate,
+    days: 1,
+    dutyDays: '—',
+    status: (log.status || 'Active').toUpperCase() === 'PRESENT' ? 'Active' : (log.status || 'Active'),
+  }
+}
+
+function formatClockTime(raw: string | null | undefined) {
+  if (!raw) return '—'
+  const m = String(raw).match(/(\d{1,2}):(\d{2})/)
+  if (m) return `${m[1].padStart(2, '0')}:${m[2]}`
+  return formatRosterPunch(raw)
+}
+
+function toHhMm(raw: string): string | undefined {
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+  const ampm = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
+  if (ampm) {
+    let h = Number(ampm[1])
+    const mins = ampm[2]
+    const period = ampm[3].toUpperCase()
+    if (period === 'PM' && h < 12) h += 12
+    if (period === 'AM' && h === 12) h = 0
+    return `${String(h).padStart(2, '0')}:${mins}`
+  }
+  const plain = trimmed.match(/^(\d{1,2}):(\d{2})/)
+  if (plain) return `${plain[1].padStart(2, '0')}:${plain[2]}`
+  return undefined
+}
+
+function todayIsoDate() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function mapAttendanceTodayRow(row: AttendanceTodayRow) {
+  const name = row.employeeName || row.employeeId
+  return {
+    employeeId: row.employeeId,
+    name,
+    initials: initialsFromName(name),
+    dept: row.departmentName || '—',
+    shift: row.shiftName || '—',
+    in: formatClockTime(row.checkIn),
+    out: formatClockTime(row.checkOut),
+    hrs: row.hours != null ? `${row.hours}h` : '—',
+    office: row.officeFlag ? 'Yes' : 'No',
+    status: (row.status || 'PRESENT').replace(/_/g, ' '),
+  }
+}
+
+function formatOtHours(hours: number) {
+  const wholeHours = Math.floor(hours)
+  const mins = Math.round((hours - wholeHours) * 60)
+  return `${wholeHours}h ${mins > 0 ? `${mins}m` : '00m'}`
+}
+
+function mapOvertimeRecord(row: OvertimeRecordRow) {
+  const name = row.employeeName || row.employeeId
+  return {
+    id: row.id,
+    employeeId: row.employeeId,
+    name,
+    initials: initialsFromName(name),
+    date: row.workDate,
+    start: formatClockTime(row.startTime),
+    end: formatClockTime(row.endTime),
+    hrs: formatOtHours(Number(row.hours) || 0),
+    status: (row.status || 'PENDING').toUpperCase(),
+    reason: row.reason || '',
+  }
+}
+
+function mapOtPolicyToUi(policies: OtPolicyRow[]) {
+  const p = policies[0]
+  if (!p) return [] as { label: string; value: string; isGreen?: boolean; policyId?: string }[]
+  return [
+    { label: 'Policy name', value: p.name, policyId: p.id },
+    { label: 'Weekday OT rate', value: `${p.weekdayMultiplier}×`, policyId: p.id },
+    { label: 'Weekend OT rate', value: `${p.weekendMultiplier}×`, policyId: p.id },
+    { label: 'Public holiday OT', value: `${p.holidayMultiplier}×`, policyId: p.id },
+    { label: 'Min OT threshold', value: `${p.dailyThresholdHours} hrs`, policyId: p.id },
+    {
+      label: 'Requires approval',
+      value: p.requiresApproval ? 'Yes' : 'No',
+      isGreen: p.requiresApproval,
+      policyId: p.id,
+    },
+    { label: 'Active', value: p.active ? 'Yes' : 'No', isGreen: p.active, policyId: p.id },
+    ...(p.notes ? [{ label: 'Notes', value: p.notes, policyId: p.id }] : []),
+  ]
+}
+
+type EmployeeDirectory = Map<string, { name: string; dept: string }>
+
+function mapAttendanceToReport(log: AttendanceRosterLog, directory: EmployeeDirectory) {
+  const person = directory.get(log.employeeId)
+  const name = person?.name || log.employeeId
+  return {
+    name,
+    dept: person?.dept || '—',
+    initials: initialsFromName(name),
+    date: log.workDate,
+    shift: log.status || 'Standard',
+    in: formatRosterPunch(log.checkInTime),
+    out: formatRosterPunch(log.checkOutTime),
+    hrs: log.workHours != null ? `${log.workHours}h` : '—',
+    late: '—',
+    ot: '—',
+    status: (log.status || 'PRESENT').replace(/_/g, ' '),
+  }
+}
+
+function parseHoursRange(hours: string): { startTime: string; endTime: string } {
+  const m = hours.match(/(\d{1,2}:\d{2})(?::\d{2})?\s*[-–/]\s*(\d{1,2}:\d{2})(?::\d{2})?/)
+  if (m) {
+    return {
+      startTime: formatShiftClock(m[1]),
+      endTime: formatShiftClock(m[2]),
+    }
+  }
+  return { startTime: '09:00', endTime: '18:00' }
+}
+
+function parseBreakMins(breakTime: string): number | undefined {
+  const m = breakTime.match(/(\d+)\s*m/i)
+  if (m) return Number(m[1])
+  const range = breakTime.match(/(\d{1,2}):(\d{2})\s*[-–]\s*(\d{1,2}):(\d{2})/)
+  if (range) {
+    const start = Number(range[1]) * 60 + Number(range[2])
+    const end = Number(range[3]) * 60 + Number(range[4])
+    const diff = end >= start ? end - start : end + 24 * 60 - start
+    return diff
+  }
+  return undefined
+}
+
+function formatPunchTime(iso: string | null | undefined) {
+  if (!iso) return '—'
+  const raw = String(iso).trim()
+  const timeOnly = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/)
+  if (timeOnly) {
+    const hh = Number(timeOnly[1])
+    const mm = Number(timeOnly[2])
+    const d = new Date()
+    d.setHours(hh, mm, 0, 0)
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return raw
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function mapAttendanceRow(log: AttendanceLog) {
+  return {
+    date: log.workDate,
+    in: formatPunchTime(log.checkInTime),
+    out: formatPunchTime(log.checkOutTime),
+    hours: log.workHours != null ? String(log.workHours) : '—',
+    status: (log.status || 'PRESENT').toUpperCase(),
+  }
+}
+
+export default function AttendanceTab({ addToast, employees = [] }: AttendanceTabProps) {
+  const [activeSubTab, setActiveSubTab] = useState<string>('Duty Roster');
+  const [searchValue, setSearchValue] = useState<string>('');
+  const [deptFilter, setDeptFilter] = useState<string>('All departments');
+  const [deptDropdownOpen, setDeptDropdownOpen] = useState(false);
+
+  // Check-In Subtab states
+  const [checkedIn, setCheckedIn] = useState<boolean>(false);
+  const [checkInTime, setCheckInTime] = useState<string | null>(null);
+  const [checkOutTime, setCheckOutTime] = useState<string | null>(null);
+  const [attendanceBusy, setAttendanceBusy] = useState(false);
+  const [recentChecks, setRecentChecks] = useState<
+    { date: string; in: string; out: string; hours: string; status: string }[]
+  >([]);
+
+  const loadMyAttendance = useCallback(async () => {
+    try {
+      const rows = await fetchMyAttendance()
+      setRecentChecks(rows.slice(0, 14).map(mapAttendanceRow))
+
+      const todayLocal = (() => {
+        const d = new Date()
+        const y = d.getFullYear()
+        const m = String(d.getMonth() + 1).padStart(2, '0')
+        const day = String(d.getDate()).padStart(2, '0')
+        return `${y}-${m}-${day}`
+      })()
+      const todayUtc = new Date().toISOString().slice(0, 10)
+      const openSession = rows.find((r) => r.checkInTime && !r.checkOutTime)
+      const todayLog =
+        rows.find((r) => {
+          const wd = String(r.workDate || '').slice(0, 10)
+          return wd === todayLocal || wd === todayUtc
+        }) || openSession
+
+      if (todayLog?.checkInTime && !todayLog.checkOutTime) {
+        setCheckedIn(true)
+        setCheckInTime(formatPunchTime(todayLog.checkInTime))
+        setCheckOutTime(null)
+      } else if (todayLog?.checkInTime && todayLog.checkOutTime) {
+        setCheckedIn(false)
+        setCheckInTime(formatPunchTime(todayLog.checkInTime))
+        setCheckOutTime(formatPunchTime(todayLog.checkOutTime))
+      } else {
+        setCheckedIn(false)
+        setCheckInTime(null)
+        setCheckOutTime(null)
+      }
+    } catch (err) {
+      if (!(err instanceof ApiError) || (err.status !== 401 && err.status !== 403)) {
+        addToast('Could not load attendance logs.', 'error')
+      }
+    }
+  }, [addToast])
+
+  useEffect(() => {
+    void loadMyAttendance()
+  }, [loadMyAttendance])
+
+  // Roster view configuration
+  const [rosterView, setRosterView] = useState<'Week' | 'Day' | 'Month'>('Week');
+  
+  // Roster / timesheets / shifts — loaded from catalog APIs (demo fallback until load)
+  const [rosterEntries, setRosterEntries] = useState<RosterEntryRow[]>([]);
+  const [rosterWeekStart, setRosterWeekStart] = useState(() => startOfWeek(new Date()));
+  const rosterData = useMemo(() => mapRosterEntries(rosterEntries), [rosterEntries]);
+  const departmentDirectory = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const e of employees ?? []) {
+      const dept = String(e.department || '—');
+      map.set(String(e.id), dept);
+      if (e.apiId) map.set(e.apiId, dept);
+    }
+    return map;
+  }, [employees]);
+  const departmentFilterOptions = useMemo(() => {
+    const depts = new Set<string>();
+    for (const e of employees ?? []) if (e.department) depts.add(String(e.department));
+    return ['All departments', ...Array.from(depts).sort()];
+  }, [employees]);
+  const weekRoster = useMemo(
+    () =>
+      mapRosterEntries(rosterEntries, rosterWeekStart).map((emp) => ({
+        ...emp,
+        dept: departmentDirectory.get(emp.id) ?? emp.dept,
+      })),
+    [rosterEntries, rosterWeekStart, departmentDirectory],
+  );
+  const rosterWeekDays = useMemo(
+    () => Array.from({ length: 7 }, (_, i) => addDays(rosterWeekStart, i)),
+    [rosterWeekStart],
+  );
+  const rosterPeriodLabel = useMemo(() => {
+    const end = addDays(rosterWeekStart, 6);
+    const fmt = (d: Date, withYear: boolean) =>
+      d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...(withYear ? { year: 'numeric' } : {}) });
+    return `${fmt(rosterWeekStart, rosterWeekStart.getFullYear() !== end.getFullYear())} – ${fmt(end, true)}`;
+  }, [rosterWeekStart]);
+
+  // Timesheets Data
+  const [timesheets, setTimesheets] = useState<
+    { id: string; name: string; dept: string; shift: string; start: string; end: string; days: number; dutyDays: string; status: string }[]
+  >([]);
+
+  // Shift Patterns Data
+  const [shiftPatterns, setShiftPatterns] = useState<ShiftPatternUi[]>([]);
+
+  // Roll Call states
+  const [rollCallDate, setRollCallDate] = useState(todayIsoDate());
+  const [rollCallRows, setRollCallRows] = useState<
+    { employeeId?: string; name: string; initials: string; dept: string; shift: string; in: string; out: string; hrs: string; office: string; status: string }[]
+  >([]);
+
+  // Manual Punch Form states
+  const [punchEmployee, setPunchEmployee] = useState('');
+  const [punchDate, setPunchDate] = useState(todayIsoDate());
+  const [punchType, setPunchType] = useState('Clock In');
+  const [punchTime, setPunchTime] = useState('09:00');
+  const [punchReason, setPunchReason] = useState('Fingerprint device offline');
+  const [punchRemark, setPunchRemark] = useState('');
+  const [todayManualPunches, setTodayManualPunches] = useState<
+    { id: string; name: string; code: string; type: string; time: string; reason: string; badge: string }[]
+  >([]);
+
+  // Unknown Swipes Data
+  const [unresolvedSwipes, setUnresolvedSwipes] = useState<
+    { id: string; name: string; initials: string; time: string; terminal: string; issue: string; color: string }[]
+  >([]);
+
+  // Overtime states
+  const [otRecords, setOtRecords] = useState<
+    { id: string; employeeId: string; name: string; initials: string; date: string; start: string; end: string; hrs: string; status: string; reason: string }[]
+  >([]);
+
+  const [otPolicy, setOtPolicy] = useState<{ label: string; value: string; isGreen?: boolean; policyId?: string }[]>([]);
+
+  // Reports states
+  const [reportType, setReportType] = useState<'detail' | 'summary'>('detail');
+  const [reportMonth, setReportMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [reportsFilterDept, setReportsFilterDept] = useState('All departments');
+  const [reportsFilterEmp, setReportsFilterEmp] = useState('');
+  const [reportsRows, setReportsRows] = useState<
+    { name: string; dept: string; initials: string; date: string; shift: string; in: string; out: string; hrs: string; late: string; ot: string; status: string }[]
+  >([]);
+  const [attendanceLogs, setAttendanceLogs] = useState<AttendanceRosterLog[]>([]);
+
+  const employeeDirectory = useMemo<EmployeeDirectory>(() => {
+    const map: EmployeeDirectory = new Map();
+    for (const e of employees ?? []) {
+      const entry = { name: e.name, dept: String(e.department || '—') };
+      map.set(String(e.id), entry);
+      if (e.apiId) map.set(e.apiId, entry);
+    }
+    return map;
+  }, [employees]);
+
+  useEffect(() => {
+    if (attendanceLogs.length === 0) return;
+    setTimesheets(attendanceLogs.map((log) => mapAttendanceToTimesheet(log, employeeDirectory)));
+    setReportsRows(attendanceLogs.map((log) => mapAttendanceToReport(log, employeeDirectory)));
+  }, [attendanceLogs, employeeDirectory]);
+
+  const reportMonthOptions = useMemo(() => {
+    const keys = new Set<string>();
+    const now = new Date();
+    keys.add(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+    for (const log of attendanceLogs) {
+      if (/^\d{4}-\d{2}/.test(log.workDate)) keys.add(log.workDate.slice(0, 7));
+    }
+    return Array.from(keys)
+      .sort()
+      .reverse()
+      .map((key) => {
+        const [y, m] = key.split('-').map(Number);
+        return { value: key, label: new Date(y, m - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) };
+      });
+  }, [attendanceLogs]);
+
+  const reportStats = useMemo(() => {
+    const pct = (num: number, den: number) => (den > 0 ? `${((num / den) * 100).toFixed(1)}%` : '—');
+    const monthLogs = attendanceLogs.filter((log) => log.workDate?.startsWith(reportMonth));
+    const monthOt = otRecords.filter((r) => r.date.startsWith(reportMonth) && /approved/i.test(r.status));
+    const otHours = (r: { hrs: string }) => parseFloat(r.hrs) || 0;
+    type Bucket = { staff: Set<string>; logs: number; present: number; late: number; absent: number; hours: number; hoursCount: number; ot: number };
+    const emptyBucket = (): Bucket => ({ staff: new Set(), logs: 0, present: 0, late: 0, absent: 0, hours: 0, hoursCount: 0, ot: 0 });
+    const total = emptyBucket();
+    const byDept = new Map<string, Bucket>();
+    for (const log of monthLogs) {
+      const dept = employeeDirectory.get(log.employeeId)?.dept || '—';
+      const bucket = byDept.get(dept) ?? emptyBucket();
+      byDept.set(dept, bucket);
+      const status = (log.status || 'PRESENT').toUpperCase();
+      for (const b of [bucket, total]) {
+        b.staff.add(log.employeeId);
+        if (status.includes('LEAVE')) continue;
+        b.logs += 1;
+        if (status.includes('ABSENT')) b.absent += 1;
+        else if (status.includes('LATE')) b.late += 1;
+        else b.present += 1;
+        if (log.workHours != null) {
+          b.hours += Number(log.workHours);
+          b.hoursCount += 1;
+        }
+      }
+    }
+    for (const r of monthOt) {
+      const dept = employeeDirectory.get(r.employeeId)?.dept || '—';
+      const bucket = byDept.get(dept) ?? emptyBucket();
+      byDept.set(dept, bucket);
+      bucket.ot += otHours(r);
+    }
+    const attended = (b: Bucket) => b.present + b.late;
+    return {
+      adherence: pct(attended(total), total.logs),
+      punctuality: pct(total.present, attended(total)),
+      overtimeHours: monthOt.reduce((sum, r) => sum + otHours(r), 0),
+      overtimeStaff: new Set(monthOt.map((r) => r.employeeId)).size,
+      absences: total.absent,
+      lateCount: total.late,
+      departments: Array.from(byDept.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([dept, b]) => ({
+          dept,
+          staff: b.staff.size,
+          avgHours: b.hoursCount > 0 ? `${(b.hours / b.hoursCount).toFixed(1)}h / day` : '—',
+          punctuality: pct(b.present, attended(b)),
+          ot: b.ot,
+          absences: b.absent,
+          attendance: pct(attended(b), b.logs),
+        })),
+    };
+  }, [attendanceLogs, otRecords, reportMonth, employeeDirectory]);
+
+  const loadCatalogAttendance = useCallback(async () => {
+    try {
+      const [patterns, roster, attRoster] = await Promise.all([
+        fetchShiftPatterns().catch(() => [] as ShiftPatternRow[]),
+        fetchRoster().catch(() => [] as RosterEntryRow[]),
+        fetchAttendanceRoster().catch(() => [] as AttendanceRosterLog[]),
+      ])
+      if (patterns.length > 0) {
+        setShiftPatterns(patterns.map(mapShiftPatternRow))
+      }
+      setRosterEntries(roster)
+      setAttendanceLogs(attRoster)
+    } catch (err) {
+      if (!(err instanceof ApiError) || (err.status !== 401 && err.status !== 403)) {
+        addToast('Could not load attendance catalog data.', 'error')
+      }
+    }
+  }, [addToast])
+
+  const loadAttendanceToday = useCallback(async (date?: string) => {
+    try {
+      const rows = await fetchAttendanceToday(date)
+      setRollCallRows(rows.map(mapAttendanceTodayRow))
+      setTodayManualPunches(
+        rows
+          .filter((r) => r.checkIn || r.checkOut)
+          .map((r) => {
+            const name = r.employeeName || r.employeeId
+            const isOut = Boolean(r.checkOut)
+            return {
+              id: `${r.employeeId}-${r.checkOut || r.checkIn || 'punch'}`,
+              name,
+              code: r.employeeId,
+              type: isOut ? 'Clock Out' : 'Clock In',
+              time: formatClockTime(isOut ? r.checkOut : r.checkIn),
+              reason: 'Attendance log',
+              badge: isOut ? 'Out' : 'In',
+            }
+          }),
+      )
+    } catch (err) {
+      if (!(err instanceof ApiError) || (err.status !== 401 && err.status !== 403)) {
+        addToast('Could not load today attendance.', 'error')
+      }
+    }
+  }, [addToast])
+
+  const loadOvertimeData = useCallback(async () => {
+    try {
+      const [records, policies] = await Promise.all([
+        fetchOvertimeRecords().catch(() => [] as OvertimeRecordRow[]),
+        fetchOtPolicies().catch(() => [] as OtPolicyRow[]),
+      ])
+      setOtRecords(records.map(mapOvertimeRecord))
+      setOtPolicy(mapOtPolicyToUi(policies))
+    } catch (err) {
+      if (!(err instanceof ApiError) || (err.status !== 401 && err.status !== 403)) {
+        addToast('Could not load overtime data.', 'error')
+      }
+    }
+  }, [addToast])
+
+  useEffect(() => {
+    void loadCatalogAttendance()
+  }, [loadCatalogAttendance])
+
+  useEffect(() => {
+    if (activeSubTab === 'Roll Call' || activeSubTab === 'Manual Punch') {
+      const date = activeSubTab === 'Manual Punch' ? punchDate : rollCallDate
+      void loadAttendanceToday(date || todayIsoDate())
+    }
+  }, [activeSubTab, rollCallDate, punchDate, loadAttendanceToday])
+
+  useEffect(() => {
+    if (activeSubTab === 'Overtime') {
+      void loadOvertimeData()
+    }
+  }, [activeSubTab, loadOvertimeData])
+
+  // Modal states
+  const [shiftModalOpen, setShiftModalOpen] = useState(false);
+  const [newShift, setNewShift] = useState({
+    name: '',
+    hours: '09:00 - 18:00',
+    breakTime: '13:00 - 14:00 (1h)',
+    nearestIn: '08:00 - 10:00',
+    nearestOut: '17:00 - 19:30',
+    allowInOT: '60 mins',
+    allowOutOT: '60 mins',
+    nightShift: 'No',
+    employees: '0'
+  });
+
+  const [timesheetRosterMode, setTimesheetRosterMode] = useState('Single shift');
+  const [timesheetShiftPattern, setTimesheetShiftPattern] = useState('Standard 9-6');
+  const [swipeShiftAssign, setSwipeShiftAssign] = useState<Record<string, string>>({});
+
+  // New interactive feature states
+  const [timesheetModalOpen, setTimesheetModalOpen] = useState(false);
+  const [newTimesheet, setNewTimesheet] = useState({
+    employeeId: '',
+    shift: 'Standard shift',
+    ...currentMonthRange(),
+    days: 22,
+    dutyDays: 'Mon-Fri'
+  });
+  const [editTimesheetModalOpen, setEditTimesheetModalOpen] = useState(false);
+  const [selectedTimesheet, setSelectedTimesheet] = useState<{
+    id: string;
+    name: string;
+    dept: string;
+    shift: string;
+    start: string;
+    end: string;
+    days: number;
+    dutyDays: string;
+    status: string;
+  } | null>(null);
+
+  const [otSetupModalOpen, setOtSetupModalOpen] = useState(false);
+  const [newOtSetup, setNewOtSetup] = useState({
+    employeeId: '',
+    date: todayIsoDate(),
+    start: '18:00',
+    end: '20:00',
+    hrs: '2.0'
+  });
+
+  const [otPolicyModalOpen, setOtPolicyModalOpen] = useState(false);
+  const [selectedPolicyIndex, setSelectedPolicyIndex] = useState<number | null>(null);
+  const [policyEditValue, setPolicyEditValue] = useState('');
+
+  // Manual Punch / Unknown Swipes hidden — Unknown Swipes has no API yet.
+  const subTabs = [
+    'Check-In',
+    'Duty Roster',
+    'Timesheet',
+    'Shift Pattern',
+    'Roll Call',
+    'Manual Punch',
+    'Overtime',
+    'Reports',
+  ];
+
+  const employeeOptions = (employees && employees.length > 0)
+    ? employees.map((e) => ({
+        id: e.apiId || e.id,
+        name: e.name,
+        initials: initialsFromName(e.name),
+        dept: String(e.department || '—'),
+      }))
+    : rosterData.map((r) => ({ id: r.id, name: r.name, initials: r.initials, dept: r.dept }))
+
+  const handleSubTabChange = (tab: string) => {
+    setActiveSubTab(tab);
+    addToast(`Switched view directory to ${tab}`, 'info');
+  };
+
+  const handleAddManualPunchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!punchEmployee) {
+      addToast('Please select a valid employee record', 'error');
+      return;
+    }
+
+    const selected = employeeOptions.find((r) => r.id === punchEmployee)
+    const apiPunchType = punchType === 'Clock Out' ? 'CHECK_OUT' as const : 'CHECK_IN' as const
+    const time = toHhMm(punchTime)
+    const reason = [punchReason, punchRemark].filter(Boolean).join(' — ') || undefined
+
+    try {
+      await adminAttendancePunch({
+        employeeId: punchEmployee,
+        punchType: apiPunchType,
+        workDate: punchDate || todayIsoDate(),
+        time,
+        reason,
+      })
+      const name = selected?.name || punchEmployee
+      setTodayManualPunches((prev) => [
+        {
+          id: createLocalId('att'),
+          name,
+          code: punchEmployee,
+          type: punchType,
+          time: time || punchTime,
+          reason: punchReason,
+          badge: apiPunchType === 'CHECK_IN' ? 'In' : 'Out',
+        },
+        ...prev,
+      ])
+      addToast(`Successfully manually processed ${punchType} for ${name}`, 'success')
+      await loadAttendanceToday(punchDate || rollCallDate || todayIsoDate())
+      setPunchEmployee('')
+      setPunchRemark('')
+    } catch (err) {
+      addToast(err instanceof ApiError ? err.message : 'Could not submit manual punch.', 'error')
+    }
+  };
+
+  const handleCreateShiftPattern = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newShift.name) {
+      addToast('Please define a valid pattern name', 'error');
+      return;
+    }
+
+    const { startTime, endTime } = parseHoursRange(newShift.hours);
+    const breakMins = parseBreakMins(newShift.breakTime);
+    try {
+      const created = await createShiftPattern({
+        name: newShift.name.trim(),
+        startTime,
+        endTime,
+        breakMins,
+        active: true,
+      });
+      setShiftPatterns((prev) => [...prev, mapShiftPatternRow(created)]);
+      addToast(`Constructed and assigned new corporate shift layout: ${created.name}`, 'success');
+      setShiftModalOpen(false);
+      setNewShift({
+        name: '',
+        hours: '09:00 - 18:00',
+        breakTime: '13:00 - 14:00 (1h)',
+        nearestIn: '08:00 - 10:00',
+        nearestOut: '17:00 - 19:30',
+        allowInOT: '60 mins',
+        allowOutOT: '60 mins',
+        nightShift: 'No',
+        employees: '0'
+      });
+    } catch (err) {
+      addToast(err instanceof ApiError ? err.message : 'Could not create shift pattern.', 'error');
+    }
+  };
+
+  const handleResolveSwipe = (id: string, name: string) => {
+    addToast(`Resolving swipe sequence for ${name}...`, 'loading');
+    setTimeout(() => {
+      setUnresolvedSwipes(prev => prev.filter(s => s.id !== id));
+      addToast(`TA check-in record aligned and authorized. Ticket ${id} moved from Unresolved.`, 'success');
+    }, 1000);
+  };
+
+  const executeCheckInFlow = async () => {
+    if (attendanceBusy) return
+    // Already completed both punches for today — don't re-trigger check-in.
+    if (checkInTime && checkOutTime) {
+      addToast('You already completed punch in/out for today.', 'info')
+      return
+    }
+    setAttendanceBusy(true)
+    try {
+      if (!checkedIn) {
+        addToast('Checking in…', 'loading')
+        const log = await checkInAttendance()
+        setCheckedIn(true)
+        setCheckInTime(formatPunchTime(log.checkInTime))
+        setCheckOutTime(null)
+        setRecentChecks((prev) => [mapAttendanceRow(log), ...prev.filter((r) => r.date !== log.workDate)])
+        addToast(`Checked in at ${formatPunchTime(log.checkInTime)}.`, 'success')
+      } else {
+        addToast('Checking out…', 'loading')
+        const log = await checkOutAttendance()
+        setCheckedIn(false)
+        setCheckOutTime(formatPunchTime(log.checkOutTime))
+        setRecentChecks((prev) => [mapAttendanceRow(log), ...prev.filter((r) => r.date !== log.workDate)])
+        addToast(`Checked out at ${formatPunchTime(log.checkOutTime)}.`, 'success')
+      }
+    } catch (err) {
+      addToast(err instanceof ApiError ? err.message : 'Attendance punch failed.', 'error')
+    } finally {
+      setAttendanceBusy(false)
+    }
+  }
+
+  const handleCreateTimesheetSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTimesheet.employeeId) {
+      addToast('Please select a valid employee record for the timesheet', 'error');
+      return;
+    }
+    const emp = employeeOptions.find(r => r.id === newTimesheet.employeeId);
+    const empName = emp ? emp.name : 'Unknown';
+    const empDept = emp ? emp.dept : '—';
+
+    const createdRec = {
+      id: createLocalId('att'),
+      name: empName,
+      dept: empDept,
+      shift: newTimesheet.shift,
+      start: newTimesheet.start,
+      end: newTimesheet.end,
+      days: Number(newTimesheet.days) || 22,
+      dutyDays: newTimesheet.dutyDays,
+      status: 'Active' as const
+    };
+
+    setTimesheets(prev => [createdRec, ...prev]);
+    addToast(`Corporate Timesheet created dynamically for ${empName}`, 'success');
+    setTimesheetModalOpen(false);
+    setNewTimesheet({
+      employeeId: '',
+      shift: 'Standard shift',
+      ...currentMonthRange(),
+      days: 22,
+      dutyDays: 'Mon-Fri'
+    });
+  };
+
+  const handleEditTimesheetSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTimesheet) {
+      addToast('No selected timesheet to update', 'error');
+      return;
+    }
+    setTimesheets(prev => prev.map(t => t.id === selectedTimesheet.id ? selectedTimesheet : t));
+    addToast(`Corporate Timesheet configuration successfully revised for ${selectedTimesheet.name}`, 'success');
+    setEditTimesheetModalOpen(false);
+    setSelectedTimesheet(null);
+  };
+
+  const handleCreateOtSetupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newOtSetup.employeeId) {
+      addToast('Please select a valid employee record for Overtime alignment', 'error');
+      return;
+    }
+    const hoursNum = Number(newOtSetup.hrs) || 2.0;
+    try {
+      const created = await createOvertimeRecord({
+        employeeId: newOtSetup.employeeId,
+        workDate: newOtSetup.date,
+        startTime: newOtSetup.start,
+        endTime: newOtSetup.end,
+        hours: hoursNum,
+      })
+      setOtRecords((prev) => [mapOvertimeRecord(created), ...prev])
+      addToast(`Overtime request created for ${created.employeeName || newOtSetup.employeeId}`, 'success')
+      setOtSetupModalOpen(false)
+      setNewOtSetup({
+        employeeId: '',
+        date: todayIsoDate(),
+        start: '18:00',
+        end: '20:00',
+        hrs: '2.0',
+      })
+    } catch (err) {
+      addToast(err instanceof ApiError ? err.message : 'Could not create overtime record.', 'error')
+    }
+  };
+
+  const handleDecideOt = async (id: string, decision: 'APPROVE' | 'REJECT') => {
+    try {
+      const updated = await decideOvertimeRecord(id, { decision })
+      setOtRecords((prev) => prev.map((r) => (r.id === id ? mapOvertimeRecord(updated) : r)))
+      addToast(`Overtime ${decision === 'APPROVE' ? 'approved' : 'rejected'}.`, 'success')
+    } catch (err) {
+      addToast(err instanceof ApiError ? err.message : 'Could not update overtime decision.', 'error')
+    }
+  };
+
+  const handleSaveOtPolicySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedPolicyIndex === null) return;
+    setOtPolicy(prev => prev.map((item, idx) => {
+      if (idx === selectedPolicyIndex) {
+        return { ...item, value: policyEditValue };
+      }
+      return item;
+    }));
+    addToast('Compliance Overtime Policy ruleset revised and saved', 'success');
+    setOtPolicyModalOpen(false);
+    setSelectedPolicyIndex(null);
+  };
+
+  const handleExportRoster = () => {
+    if (weekRoster.length === 0) {
+      addToast('No roster entries for this week to export.', 'info');
+      return;
+    }
+    const dayKeys = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
+    const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const header = ['Employee', 'Department', ...rosterWeekDays.map(localIsoDate)];
+    const rows = weekRoster.map((emp) => [
+      emp.name,
+      emp.dept,
+      ...dayKeys.map((k) => `${emp.schedule[k].time} (${emp.schedule[k].status})`),
+    ]);
+    const csv = [header, ...rows].map((r) => r.map(escape).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `roster_${localIsoDate(rosterWeekStart)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    addToast('Roster exported as CSV.', 'success');
+  };
+
+  const handleTriggerTimesheetAction = (action: string) => {
+    addToast(`Triggering custom Timesheet processor: ${action}`, 'success');
+  };
+
+  return (
+    <div id="attendance-portal-stage" className="space-y-6">
+      <ModuleHeader
+        title="Attendance"
+        description="Rosters, punches, and timesheet controls."
+      />
+
+      {/* Upper Navigation sub-menus completely aligned and capitalized */}
+      <div id="attendance-module-navigator" className="flex flex-col lg:flex-row lg:items-center justify-between border-b border-slate-200/85 pb-4 gap-4">
+        <div id="attendance-navigation-tabs" className="flex items-center gap-2 select-none overflow-x-auto w-full lg:w-auto scrollbar-none py-1">
+          {subTabs.map((tab) => {
+            const isActive = activeSubTab === tab;
+            return (
+              <button
+                id={`tab-${tab.toLowerCase().replace(/\s+/g, '-')}`}
+                key={tab}
+                onClick={() => handleSubTabChange(tab)}
+                className={`text-xs font-bold px-3.5 py-2 rounded-xl transition-all shrink-0 relative cursor-pointer ${
+                  isActive
+                    ? 'bg-blue-50 text-novora'
+                    : 'text-slate-600 hover:text-slate-950 hover:bg-slate-50'
+                }`}
+              >
+                <span>{tab}</span>
+                {tab === 'Unknown Swipes' && unresolvedSwipes.length > 0 && (
+                  <span className="ml-1.5 px-1.5 py-0.5 text-[9px] font-extrabold bg-red-500 text-white rounded-full inline-flex items-center whitespace-nowrap shrink-0">
+                    {unresolvedSwipes.length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Outer Header Actions aligned elegantly */}
+        <div id="attendance-upper-actions" className="flex items-center gap-3 shrink-0 flex-nowrap">
+          <DropdownAnchor
+            open={deptDropdownOpen}
+            onClose={() => setDeptDropdownOpen(false)}
+            align="right"
+          >
+            <button
+              type="button" aria-expanded={deptDropdownOpen}
+              onClick={() => setDeptDropdownOpen(!deptDropdownOpen)}
+              className="nv-dd-trigger"
+            >
+              <span className="whitespace-nowrap">{deptFilter}</span>
+              <ChevronDown className="nv-chevron-down nv-chevron-down--md" />
+            </button>
+            {deptDropdownOpen && (
+              <div className="nv-dropdown-menu w-48 bg-white border border-slate-200 rounded-xl shadow-lg py-1">
+                {departmentFilterOptions.map((dept) => (
+                  <button
+                    key={dept}
+                    type="button"
+                    onClick={() => {
+                      setDeptFilter(dept);
+                      setDeptDropdownOpen(false);
+                      addToast(`Roster filtered dynamically to ${dept}`, 'info');
+                    }}
+                    className="w-full text-left px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 hover:text-novora transition-colors"
+                  >
+                    {dept}
+                  </button>
+                ))}
+              </div>
+            )}
+          </DropdownAnchor>
+
+          <button
+            onClick={handleExportRoster}
+            className="h-9 inline-flex items-center gap-2 px-3.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/20 rounded-xl transition-all shadow-xs cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+            <span>Export</span>
+          </button>
+
+          <button
+            onClick={() => handleSubTabChange('Manual Punch')}
+            className="h-9 inline-flex items-center gap-1.5 px-3.5 text-xs font-bold text-white bg-novora hover:bg-opacity-95 rounded-xl transition-all shadow-xs cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Plus className="h-3.5 w-3.5 shrink-0" />
+            <span>Manual Punch</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Switchboard Stage Container */}
+      <div id="attendance-active-tab-panel" className="min-h-[460px]">
+
+        {/* 1. CHECK-IN SUB-TAB */}
+        {activeSubTab === 'Check-In' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            
+            {/* Clocking Station Control Panel */}
+            <div className="lg:col-span-5 nv-card p-6 shadow-xs space-y-5">
+              <div>
+                <h4 className="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-novora" />
+                  <span>Interactive Attendance Workstation</span>
+                </h4>
+                <p className="text-[11px] font-semibold text-slate-400 mt-1">
+                  Secure local biometric terminal alignment
+                </p>
+              </div>
+
+              <div id="checkin-timer-widget" className="bg-slate-50/70 p-6 rounded-2xl border border-slate-100 text-center space-y-4">
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wide">
+                  Today ({new Date().toLocaleDateString('en-CA')})
+                </span>
+
+                <div className="space-y-1">
+                  <h3 className="text-3xl font-extrabold text-slate-800 tracking-tight font-mono">
+                    {checkedIn ? checkInTime : '—'}
+                  </h3>
+                  <p className="text-xs font-semibold text-slate-400">
+                    Checked In Server Time
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-2 text-left border-t border-slate-200/50">
+                  <div>
+                    <span className="text-[9px] font-bold text-slate-400 block uppercase">Check-In</span>
+                    <span className="text-xs font-extrabold text-slate-700">{checkInTime || '—'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-bold text-slate-400 block uppercase">Check-Out</span>
+                    <span className="text-xs font-extrabold text-slate-700">{checkOutTime || '—'}</span>
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <p className="text-[11px] font-bold text-slate-500">
+                    Status: {checkedIn ? (
+                      <span className="text-emerald-500 font-extrabold bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100 italic inline-block inline-flex items-center whitespace-nowrap shrink-0">● ACTIVE WORK SESSION</span>
+                    ) : (
+                      <span className="text-slate-400">Not Clocked-In</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={executeCheckInFlow}
+                  className={`w-full py-3.5 rounded-xl font-bold text-xs tracking-wide transition-all uppercase cursor-pointer text-center ${
+                    checkedIn
+                      ? 'bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100/70'
+                      : 'bg-novora hover:bg-opacity-95 text-white shadow-xs'
+                  }`}
+                >
+                  {checkedIn ? 'Check Out of Session' : 'Clock Check-In Now'}
+                </button>
+                <p className="text-[10px] text-center text-slate-400 font-medium">
+                  Matches your login email authentication: {navigator.userAgent.includes('Mobile') ? 'Mobile App Key' : 'Web Console Login'}
+                </p>
+              </div>
+            </div>
+
+            {/* Recent Attendance Days Ledger */}
+            <div className="lg:col-span-7 nv-card p-6 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800 tracking-tight">Recent Days Log</h4>
+                  <p className="text-[11px] font-semibold text-slate-400 mt-0.5">Your official biometric timesheet audit trail</p>
+                </div>
+                <span className="text-xs font-bold text-novora cursor-pointer hover:underline">View comprehensive history</span>
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {recentChecks.map((log, index) => (
+                  <div key={index} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
+                    <div className="flex items-center gap-3">
+                      <div className="h-8.5 w-8.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center">
+                        <Calendar className="h-4 w-4 text-slate-400" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-slate-700">{log.date}</p>
+                        <p className="text-[10px] font-semibold text-slate-400">
+                          {log.in} &rarr; {log.out}
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-3 mt-1 sm:mt-0">
+                      <div className="text-right">
+                        <span className="text-[10px] font-bold text-slate-600 block">{log.hours} hrs completed</span>
+                        <span className="text-[8px] font-semibold text-slate-400 uppercase">Timesheet matched</span>
+                      </div>
+                      <span className="bg-emerald-50 text-emerald-600 text-[10px] font-extrabold px-2.5 py-1 rounded-md border border-emerald-100 uppercase tracking-widest">
+                        {log.status}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 2. DUTY ROSTER SUB-TAB */}
+        {activeSubTab === 'Duty Roster' && (
+          <div className="space-y-6">
+            
+            {/* Week Scheduler Top controls */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-slate-500"> Roster Period: </span>
+                <span className="text-sm font-extrabold text-slate-800 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">{rosterPeriodLabel}</span>
+                
+                <div id="roster-arrow-controls" className="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-white">
+                  <button type="button" aria-label="Previous week" className="p-2 hover:bg-slate-50 text-slate-500 cursor-pointer" onClick={() => setRosterWeekStart((w) => addDays(w, -7))}><ChevronLeft className="h-4 w-4" /></button>
+                  <button type="button" aria-label="Next week" className="p-2 hover:bg-slate-50 text-slate-500 border-l border-slate-100 cursor-pointer" onClick={() => setRosterWeekStart((w) => addDays(w, 7))}><ChevronRight className="h-4 w-4" /></button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRosterWeekStart(startOfWeek(new Date()))}
+                  className="text-xs font-bold text-novora hover:underline cursor-pointer"
+                >
+                  This week
+                </button>
+              </div>
+
+              {/* Day Segment Controls */}
+              <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200/50">
+                {(['Week', 'Day', 'Month'] as const).map((view) => (
+                  <button
+                    key={view}
+                    onClick={() => {
+                      setRosterView(view);
+                      addToast(`Switched calendar matrix view into ${view}`, 'info');
+                    }}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                      rosterView === view
+                        ? 'bg-white text-slate-800 shadow-xs ring-1 ring-slate-100'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    {view}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Large Schedule Table */}
+            <div className="nv-card shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100">
+                      <th className="p-4 text-[11px] font-bold text-slate-400 uppercase tracking-wider min-w-[180px]">Employee Card</th>
+                      {rosterWeekDays.map((day) => (
+                        <th
+                          key={localIsoDate(day)}
+                          className={`p-3 text-[11px] font-bold uppercase tracking-wider text-center ${
+                            day.toDateString() === new Date().toDateString() ? 'text-novora' : 'text-slate-400'
+                          }`}
+                        >
+                          {day.toLocaleDateString('en-GB', { weekday: 'short' })} {day.getDate()}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {weekRoster
+                      .filter(emp => deptFilter === 'All departments' || emp.dept === deptFilter)
+                      .map((emp) => (
+                        <tr key={emp.id} className="hover:bg-slate-50/40 transition-colors">
+                          <td className="p-4">
+                            <div className="flex items-center gap-3">
+                              <div className="h-9 w-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center shadow-xs">
+                                <span className="text-xs font-extrabold text-indigo-600">{emp.initials}</span>
+                              </div>
+                              <div>
+                                <h5 className="text-xs font-bold text-slate-800 leading-normal">{emp.name}</h5>
+                                <p className="text-[10px] font-semibold text-slate-400 leading-none mt-0.5">{emp.dept}</p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Render cells for each weekday */}
+                          {Object.keys(emp.schedule).map((dayKey) => {
+                            const sched = emp.schedule[dayKey as keyof typeof emp.schedule];
+                            let cellBg = 'bg-slate-50 text-slate-400 border-slate-100';
+                            let indicatorColor = 'bg-slate-300';
+
+                            if (sched.status === 'Completed') {
+                              cellBg = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                              indicatorColor = 'bg-emerald-500';
+                            } else if (sched.status === 'Clock in' || sched.status === 'OT active' || sched.status === 'Late in') {
+                              cellBg = 'bg-sky-50 text-sky-700 border-sky-200';
+                              indicatorColor = 'bg-sky-500';
+                            } else if (sched.status === 'On leave') {
+                              cellBg = 'bg-amber-50 text-amber-700 border-amber-200';
+                              indicatorColor = 'bg-amber-500';
+                            } else if (sched.status === 'Planned') {
+                              cellBg = 'bg-sky-50 text-sky-700 border-sky-200';
+                              indicatorColor = 'bg-sky-500';
+                            } else if (sched.status === 'Absent') {
+                              cellBg = 'bg-rose-50 text-rose-700 border-rose-250';
+                              indicatorColor = 'bg-rose-500';
+                            } else if (sched.status === 'Night') {
+                              cellBg = 'bg-indigo-50 text-indigo-700 border-indigo-200';
+                              indicatorColor = 'bg-indigo-500';
+                            }
+
+                            return (
+                              <td key={dayKey} className="p-2 gap-2 text-center">
+                                <div className={`p-2.5 rounded-xl border text-[10px] font-extrabold text-center mx-auto max-w-[110px] space-y-0.5 ${cellBg}`}>
+                                  <span className="block truncate">{sched.time}</span>
+                                  <span className="inline-flex items-center gap-1 text-[8px] font-extrabold tracking-uppercase opacity-85">
+                                    <span className={`h-1 w-1 rounded-full ${indicatorColor}`} />
+                                    {sched.status}
+                                  </span>
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                    ))}
+                    {weekRoster.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="p-8 text-center text-xs font-semibold text-slate-400">
+                          No shifts scheduled yet. Assign staff from the Shift Pattern tab.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Bottom Schedule Legend Panel */}
+              <div className="bg-slate-50 border-t border-slate-100 p-4">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2.5">Duty Legend Indicator Values</div>
+                <div className="flex flex-wrap items-center gap-4">
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600"><span className="h-3 w-3 rounded-md bg-emerald-500 inline-block border border-emerald-100" /> Completed</span>
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600"><span className="h-3 w-3 rounded-md bg-sky-500 inline-block border border-sky-100" /> Clock in / OT Active</span>
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600"><span className="h-3 w-3 rounded-md bg-sky-400 inline-block border border-sky-100" /> Planned / Off</span>
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600"><span className="h-3 w-3 rounded-md bg-amber-400 inline-block border border-amber-100" /> On leave / Sick</span>
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600"><span className="h-3 w-3 rounded-md bg-indigo-500 inline-block border border-indigo-100" /> Night shift</span>
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600"><span className="h-3 w-3 rounded-md bg-rose-500 inline-block border border-rose-100" /> Absent (No swiped badge)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 3. TIMESHEET SUB-TAB */}
+        {activeSubTab === 'Timesheet' && (
+          <div className="space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <SelectMenu
+                  value={timesheetRosterMode}
+                  onChange={setTimesheetRosterMode}
+                  aria-label="Roster mode"
+                  className="w-auto"
+                  triggerClassName="bg-slate-50 border-slate-200 p-2 rounded-xl text-xs font-bold text-slate-700"
+                  options={[
+                    { value: 'Single shift', label: 'Single shift' },
+                    { value: 'Flexible rosters', label: 'Flexible rosters' },
+                  ]}
+                />
+                <SelectMenu
+                  value={timesheetShiftPattern}
+                  onChange={setTimesheetShiftPattern}
+                  aria-label="Shift pattern"
+                  className="w-auto"
+                  triggerClassName="bg-slate-50 border-slate-200 p-2 rounded-xl text-xs font-bold text-slate-700"
+                  options={[
+                    { value: 'Standard 9-6', label: 'Standard 9-6' },
+                    { value: 'Night Shift 10-7', label: 'Night Shift 10-7' },
+                    { value: 'Alternative OT patterns', label: 'Alternative OT patterns' },
+                  ]}
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleTriggerTimesheetAction('Copy')}
+                  className="bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/20 font-bold text-xs text-slate-700 px-3.5 py-2 rounded-xl transition-all shadow-xs shrink-0 flex items-center gap-2 cursor-pointer"
+                >
+                  <span>Copy timesheet</span>
+                </button>
+                <button
+                  onClick={() => setTimesheetModalOpen(true)}
+                  className="h-9 inline-flex items-center gap-2 px-3.5 text-xs font-bold text-white bg-novora hover:bg-opacity-95 rounded-xl transition-all shadow-xs shrink-0 cursor-pointer whitespace-nowrap"
+                >
+                  <span>Create timesheet</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="nv-card p-4 shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <th className="pb-3 pl-3">Employee</th>
+                      <th className="pb-3">Department</th>
+                      <th className="pb-3">Assigned Shift</th>
+                      <th className="pb-3">Date From</th>
+                      <th className="pb-3">Date To</th>
+                      <th className="pb-3 text-center">Duty Days</th>
+                      <th className="pb-3">Working Logic</th>
+                      <th className="pb-3">Status</th>
+                      <th className="pb-3 text-right pr-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-150">
+                    {timesheets
+                      .filter(t => deptFilter === 'All departments' || t.dept === deptFilter)
+                      .map((t) => (
+                        <tr key={t.id} className="text-xs hover:bg-slate-50/10">
+                          <td className="py-3.5 pl-3">
+                            <span className="font-extrabold text-slate-800">{t.name}</span>
+                          </td>
+                          <td className="py-3.5 font-semibold text-slate-500">{t.dept}</td>
+                          <td className="py-3.5"><span className="text-slate-700 font-bold">{t.shift}</span></td>
+                          <td className="py-3.5 font-semibold text-slate-500">{t.start}</td>
+                          <td className="py-3.5 font-semibold text-slate-500">{t.end}</td>
+                          <td className="py-3.5 font-bold text-slate-700 text-center">{t.days}</td>
+                          <td className="py-3.5 font-bold text-slate-400">{t.dutyDays}</td>
+                          <td className="py-3.5">
+                            <span className={`px-2.5 py-1 rounded-md text-[10px] font-extrabold border ${
+                              t.status === 'Active'
+                                ? 'bg-emerald-50 text-emerald-600 border-emerald-100'
+                                : 'bg-amber-50 text-amber-600 border-amber-100'
+                            }`}>
+                              {t.status}
+                            </span>
+                          </td>
+                          <td className="py-3.5 text-right pr-3">
+                            <button
+                              title="Edit"
+                              onClick={() => {
+                                setSelectedTimesheet(t);
+                                setEditTimesheetModalOpen(true);
+                              }}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-novora hover:bg-slate-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                            >
+                              <Edit2 className="h-3.5 w-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 4. SHIFT PATTERN SUB-TAB */}
+        {activeSubTab === 'Shift Pattern' && (
+          <div className="space-y-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest bg-slate-100 px-3 py-1 rounded-full border border-slate-100 inline-block inline-flex items-center whitespace-nowrap shrink-0">
+                  Shift patterns defined: {shiftPatterns.length} patterns
+                </p>
+              </div>
+              <button
+                onClick={() => setShiftModalOpen(true)}
+                className="h-9 inline-flex items-center gap-1.5 px-3.5 text-xs font-bold text-white bg-novora hover:bg-opacity-95 rounded-xl transition-all shadow-xs cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-4 w-4 shrink-0" />
+                <span>New Shift Pattern</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {shiftPatterns.map((pat, idx) => (
+                <div key={idx} className="nv-card p-5 shadow-xs hover:shadow-md transition-shadow relative space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-slate-800 tracking-tight">{pat.name}</h4>
+                    <span className="bg-emerald-50 text-emerald-600 text-[10px] font-extrabold px-2.5 py-0.5 rounded border border-emerald-100">
+                      Active
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-y-3 gap-x-4 border-t border-slate-100 pt-3 text-xs leading-relaxed">
+                    <div>
+                      <span className="block text-[10px] text-slate-400 font-bold uppercase">Work Hours</span>
+                      <span className="font-extrabold text-slate-700">{pat.data.hours}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-slate-400 font-bold uppercase">Break Time</span>
+                      <span className="font-semibold text-slate-500">{pat.data.breakTime}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-slate-400 font-bold uppercase">Nearest Time (In)</span>
+                      <span className="font-semibold text-slate-500">{pat.data.nearestIn}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-slate-400 font-bold uppercase">Nearest Time (Out)</span>
+                      <span className="font-semibold text-slate-500">{pat.data.nearestOut}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-slate-400 font-bold uppercase">Allow in OT</span>
+                      <span className="font-semibold text-slate-500">{pat.data.allowInOT}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-slate-400 font-bold uppercase">Allow out OT</span>
+                      <span className="font-semibold text-slate-500">{pat.data.allowOutOT}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-slate-400 font-bold uppercase">Night Shift</span>
+                      <span className={`font-extrabold ${pat.data.nightShift === 'Yes' ? 'text-indigo-600' : 'text-slate-500'}`}>{pat.data.nightShift}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-slate-400 font-bold uppercase">Assigned Employees</span>
+                      <span className="font-extrabold text-novora">{pat.data.employees}</span>
+                    </div>
+
+                    {/* Interactive card footer actions */}
+                    <div className="col-span-2 pt-3 border-t border-slate-100 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          addToast(`Modifying schedule details and boundary limits for ${pat.name}`, 'info');
+                        }}
+                        className="text-[10px] font-bold text-novora hover:underline"
+                      >
+                        Edit rules
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void (async () => {
+                              const withApi = employees.filter((e) => e.apiId)
+                              if (withApi.length === 0) {
+                                addToast('No employees with API ids available to assign.', 'error')
+                                return
+                              }
+                              if (!pat.id) {
+                                addToast('Save this shift pattern before assigning staff.', 'error')
+                                return
+                              }
+                              const emp = withApi[0]
+                              try {
+                                const today = new Date().toLocaleDateString('en-CA')
+                                await createRosterEntry({
+                                  employeeId: emp.apiId!,
+                                  workDate: today,
+                                  shiftPatternId: pat.id,
+                                  status: 'scheduled',
+                                })
+                                await loadCatalogAttendance()
+                                addToast(`Assigned ${emp.name} to ${pat.name} for ${today}.`, 'success')
+                              } catch (err) {
+                                addToast(
+                                  err instanceof ApiError ? err.message : 'Could not assign staff to roster.',
+                                  'error',
+                                )
+                              }
+                            })()
+                          }}
+                          className="bg-slate-50 border border-slate-200 py-1 px-2.5 rounded-lg text-[9px] font-extrabold hover:bg-novora/10 hover:text-novora hover:border-novora/10 transition-colors"
+                        >
+                          + Assign Staff
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (shiftPatterns.length <= 1) {
+                              addToast('Cannot delete the last remaining corporate shift pattern', 'error');
+                              return;
+                            }
+                            setShiftPatterns(prev => prev.filter((_, pIdx) => pIdx !== idx));
+                            addToast(`Archived and unlinked shift pattern: ${pat.name}`, 'success');
+                          }}
+                          className="text-slate-400 hover:text-rose-500 transition-colors p-1"
+                          title="Archive pattern"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 5. ROLL CALL SUB-TAB */}
+        {activeSubTab === 'Roll Call' && (
+          <div className="space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <input
+                  type="date"
+                  value={rollCallDate}
+                  onChange={(e) => setRollCallDate(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 py-1.5 px-3 rounded-xl text-xs font-bold text-slate-700"
+                />
+
+                <span className="bg-emerald-50 text-emerald-600 text-xs font-bold px-3 py-1.5 rounded-xl border border-emerald-100">
+                  Present: 1,148
+                </span>
+                <span className="bg-rose-50 text-rose-600 text-xs font-bold px-3 py-1.5 rounded-xl border border-rose-100">
+                  Absent: 23
+                </span>
+                <span className="bg-amber-50 text-amber-600 text-xs font-bold px-3 py-1.5 rounded-xl border border-amber-100">
+                  On leave: 47
+                </span>
+              </div>
+
+              <button
+                onClick={() => addToast('Compiling custom roll call report spreadsheet...', 'success')}
+                className="bg-white border border-slate-200 hover:bg-slate-50/50 font-bold text-xs text-slate-700 px-3.5 py-2.5 rounded-xl shadow-xs shrink-0 cursor-pointer"
+              >
+                <span>Export roll call</span>
+              </button>
+            </div>
+
+            <div className="nv-card p-4 shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <th className="pb-3 pl-3">Employee</th>
+                      <th className="pb-3">Department</th>
+                      <th className="pb-3">Shift</th>
+                      <th className="pb-3">Clock In</th>
+                      <th className="pb-3">Clock Out</th>
+                      <th className="pb-3">Work Hours</th>
+                      <th className="pb-3 text-center">In Office?</th>
+                      <th className="pb-3 pr-3 text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {rollCallRows
+                      .filter(row => deptFilter === 'All departments' || row.dept === deptFilter)
+                      .map((row, idx) => {
+                        let bgStatus = 'bg-slate-50 text-slate-600';
+
+                        if (row.status === 'In office') {
+                          bgStatus = 'bg-blue-50 text-blue-600 border-blue-100';
+                        } else if (row.status === 'Completed') {
+                          bgStatus = 'bg-emerald-50 text-emerald-600 border-emerald-100';
+                        } else if (row.status === 'Late') {
+                          bgStatus = 'bg-sky-50 text-sky-600 border-sky-100';
+                        } else if (row.status === 'Absent') {
+                          bgStatus = 'bg-rose-50 text-rose-600 border-rose-100';
+                        } else if (row.status === 'On leave') {
+                          bgStatus = 'bg-amber-50 text-amber-600 border-amber-100';
+                        }
+
+                        return (
+                          <tr key={idx} className="text-xs hover:bg-slate-50/20">
+                            <td className="py-3 pl-3">
+                              <div className="flex items-center gap-3.5">
+                                <div className="h-7 w-7 rounded bg-novora/8 text-novora font-bold flex items-center justify-center">
+                                  {row.initials}
+                                </div>
+                                <span className="font-extrabold text-slate-800">{row.name}</span>
+                              </div>
+                            </td>
+                            <td className="py-3 font-semibold text-slate-500">{row.dept}</td>
+                            <td className="py-3 font-semibold text-slate-600">{row.shift}</td>
+                            <td className="py-3 font-bold font-mono text-slate-700">{row.in}</td>
+                            <td className="py-3 font-bold font-mono text-slate-700">{row.out}</td>
+                            <td className="py-3 font-bold font-mono text-slate-500">{row.hrs}</td>
+                            <td className="py-3 text-center text-xs">
+                              {row.office === 'Yes' ? (
+                                <span className="text-emerald-500 bg-emerald-50/50 px-2 py-0.5 rounded font-extrabold border border-emerald-100">Yes</span>
+                              ) : row.office === 'No' ? (
+                                <span className="text-slate-400 bg-slate-50 px-2 py-0.5 rounded font-extrabold border border-slate-100">No</span>
+                              ) : (
+                                <span className="text-slate-400">&mdash;</span>
+                              )}
+                            </td>
+                            <td className="py-3 pr-3 text-right">
+                              <span className={`px-2 py-0.5 border rounded-md text-[10px] font-extrabold ${bgStatus}`}>
+                                {row.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 6. MANUAL PUNCH SUB-TAB */}
+        {activeSubTab === 'Manual Punch' && (
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+            
+            {/* Left box 5cols: Entry Form */}
+            <div className="xl:col-span-5 nv-card p-6 shadow-xs space-y-4">
+              <div>
+                <h4 className="text-sm font-bold text-slate-800 tracking-tight">Manual Punch Entry</h4>
+                <p className="text-[11px] font-semibold text-slate-400 mt-1">Request paper trail or biometric bypass correction</p>
+              </div>
+
+              <form onSubmit={handleAddManualPunchSubmit} className="space-y-4.5">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 block uppercase">Employee <span className="text-red-500">*</span></label>
+                  <SelectMenu
+                    value={punchEmployee}
+                    onChange={setPunchEmployee}
+                    placeholder="-- Select employee --"
+                    triggerClassName="text-xs font-bold bg-slate-50 border-slate-200"
+                    options={[
+                      { value: '', label: '-- Select employee --' },
+                      ...employeeOptions.map(emp => ({
+                        value: emp.id,
+                        label: `${emp.name} (${emp.id})`,
+                      })),
+                    ]}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 block uppercase">Date <span className="text-red-500">*</span></label>
+                    <input
+                      type="date"
+                      value={punchDate}
+                      onChange={(e) => setPunchDate(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 focus:border-novora p-2 text-xs font-bold text-slate-700"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 block uppercase">Punch Type <span className="text-red-500">*</span></label>
+                    <SelectMenu
+                      value={punchType}
+                      onChange={setPunchType}
+                      triggerClassName="text-xs font-bold bg-slate-50 border-slate-200"
+                      options={[
+                        { value: 'Clock In', label: 'Clock In' },
+                        { value: 'Clock Out', label: 'Clock Out' },
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 block uppercase">Time (Server Time)</label>
+                  <input
+                    type="text"
+                    value={punchTime}
+                    onChange={(e) => setPunchTime(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-novora p-2 text-xs font-bold font-mono text-slate-700"
+                    placeholder="e.g. 09:00 AM"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 block uppercase">Reason</label>
+                  <SelectMenu
+                    value={punchReason}
+                    onChange={setPunchReason}
+                    triggerClassName="text-xs font-bold bg-slate-50 border-slate-200"
+                    options={[
+                      { value: 'Fingerprint device offline', label: 'Fingerprint device offline' },
+                      { value: 'Forgot to swipe', label: 'Forgot to swipe' },
+                      { value: 'Remote work', label: 'Remote work' },
+                      { value: 'Biometric verification failed', label: 'Biometric failed' },
+                    ]}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 block uppercase">Remark</label>
+                  <textarea
+                    value={punchRemark}
+                    onChange={(e) => setPunchRemark(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-novora p-2 text-xs font-semibold text-slate-600 h-16 rounded-xl"
+                    placeholder="Optional note for HR record..."
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3.5 pt-2">
+                  <button
+                    type="submit"
+                    onClick={() => setPunchType('Clock In')}
+                    className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs py-3 rounded-xl transition-all cursor-pointer shadow-xs text-center"
+                  >
+                    Clock In
+                  </button>
+                  <button
+                    type="submit"
+                    onClick={() => setPunchType('Clock Out')}
+                    className="bg-rose-50 hover:bg-rose-100/70 border border-rose-200 text-rose-600 font-bold text-xs py-3 rounded-xl transition-all cursor-pointer shadow-xs text-center"
+                  >
+                    Clock Out
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Right box 7cols: Matches "Today's manual punches (4 records) */}
+            <div className="xl:col-span-7 nv-card p-6 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800 tracking-tight">Today's Manual Punches</h4>
+                  <p className="text-[11px] font-semibold text-slate-400 mt-0.5"> Biometric verification records logged manually today</p>
+                </div>
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider bg-slate-100 px-3 py-1 rounded-full border border-slate-100 text-right inline-flex items-center whitespace-nowrap shrink-0">
+                  {todayManualPunches.length} records
+                </span>
+              </div>
+
+              <div className="divide-y divide-slate-150">
+                {todayManualPunches.map((p) => (
+                  <div key={p.id} className="py-3 flex items-center justify-between first:pt-0 last:pb-0">
+                    <div className="flex items-center gap-3">
+                      <div className="text-base font-extrabold text-slate-800 font-mono tracking-tight leading-none bg-slate-50 border border-slate-100 rounded-xl p-2.5">
+                        {p.time}
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-slate-800">{p.name} <span className="text-[10px] text-slate-400 font-semibold italic ml-1">{p.code}</span></p>
+                        <p className="text-[10px] font-semibold text-slate-400">Type: {p.type} &bull; Reason: {p.reason}</p>
+                      </div>
+                    </div>
+
+                    <span className={`px-2.5 py-1 text-[10px] font-extrabold border rounded-md ${
+                      p.badge === 'In'
+                        ? 'bg-emerald-50 text-emerald-600 border-emerald-100'
+                        : p.badge === 'Out'
+                        ? 'bg-rose-50 text-rose-600 border-rose-100'
+                        : 'bg-slate-50 text-slate-600 border-slate-100'
+                    }`}>
+                      {p.badge}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 7. UNKNOWN SWIPES SUB-TAB */}
+        {activeSubTab === 'Unknown Swipes' && (
+          <div className="space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-extrabold text-slate-500">Unresolved Tickets: </span>
+                <span className="bg-rose-50 text-rose-600 px-3 py-1 text-xs font-extrabold rounded-full border border-rose-100 inline-flex items-center whitespace-nowrap shrink-0">
+                  {unresolvedSwipes.length} unresolved
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    addToast('Evaluating match logic...', 'loading');
+                    setTimeout(() => {
+                      setUnresolvedSwipes([]);
+                      addToast('Resolved and integrated all swipe tickets.', 'success');
+                    }, 1000);
+                  }}
+                  className="bg-white border border-slate-200 hover:bg-slate-50/55 font-bold text-xs text-slate-700 px-3.5 py-2 rounded-xl transition-colors cursor-pointer"
+                >
+                  Resolve all
+                </button>
+                <button
+                  onClick={() => addToast('Selected tickets marked to resolution workflows', 'info')}
+                  className="h-9 inline-flex items-center px-3.5 text-xs font-bold text-white bg-novora hover:bg-opacity-95 rounded-xl transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  Resolve selected
+                </button>
+              </div>
+            </div>
+
+            <div className="nv-card p-4 shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <th className="pb-3 pl-3 w-12 text-center">
+                        <input type="checkbox" className="rounded" defaultChecked />
+                      </th>
+                      <th className="pb-3">TA Number</th>
+                      <th className="pb-3">Employee</th>
+                      <th className="pb-3">Swipe Time</th>
+                      <th className="pb-3">Terminal Location</th>
+                      <th className="pb-3">Flagged Issue</th>
+                      <th className="pb-3">Assign To Shift</th>
+                      <th className="pb-3 pr-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {unresolvedSwipes.map((s, idx) => (
+                      <tr key={idx} className="text-xs hover:bg-slate-50/20">
+                        <td className="py-3.5 text-center">
+                          <input type="checkbox" className="rounded border-slate-200" defaultChecked />
+                        </td>
+                        <td className="py-3.5 font-extrabold text-red-500 font-mono">{s.id}</td>
+                        <td className="py-3.5">
+                          <div className="flex items-center gap-2">
+                            <div className="h-6 w-6 rounded bg-novora/8 text-novora font-bold flex items-center justify-center text-[10px]">
+                              {s.initials}
+                            </div>
+                            <span className="font-bold text-slate-700">{s.name}</span>
+                          </div>
+                        </td>
+                        <td className="py-3.5 font-bold text-slate-700 font-mono">{s.time}</td>
+                        <td className="py-3.5 font-semibold text-slate-500">{s.terminal}</td>
+                        <td className="py-3.5">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${s.color}`}>
+                            {s.issue}
+                          </span>
+                        </td>
+                        <td className="py-3.5">
+                          <SelectMenu
+                            value={swipeShiftAssign[s.id] ?? ''}
+                            onChange={(v) => setSwipeShiftAssign(prev => ({ ...prev, [s.id]: v }))}
+                            placeholder="-- Assign --"
+                            aria-label="Assign shift"
+                            className="w-auto"
+                            triggerClassName="bg-slate-50 border-slate-200 p-1 rounded font-bold text-[11px] text-slate-600"
+                            options={[
+                              { value: '', label: '-- Assign --' },
+                              { value: 'Standard Shift 9-6', label: 'Standard Shift 9-6' },
+                              { value: 'Night Shift 10-7', label: 'Night Shift 10-7' },
+                              { value: 'Flexible PM Shift', label: 'Flexible PM Shift' },
+                            ]}
+                          />
+                        </td>
+                        <td className="py-3.5 text-right pr-3">
+                          <button
+                            onClick={() => handleResolveSwipe(s.id, s.name === '—' ? 'Biometric ID' : s.name)}
+                            className="bg-white border border-slate-200 hover:border-emerald-300 hover:text-emerald-600 font-bold text-[10px] px-2.5 py-1 rounded transition-colors cursor-pointer shadow-2xs"
+                          >
+                            Save
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 8. OVERTIME SUB-TAB */}
+        {activeSubTab === 'Overtime' && (
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+            
+            {/* Left Box Overtime Records */}
+            <div className="xl:col-span-6 nv-card p-6 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800 tracking-tight">Specific Overtime Records</h4>
+                  <p className="text-[11px] font-semibold text-slate-400 mt-0.5">Approved extra working hour datasets</p>
+                </div>
+                <button
+                  onClick={() => setOtSetupModalOpen(true)}
+                  className="h-9 inline-flex items-center gap-1.5 px-3.5 text-xs font-bold bg-white border border-slate-200 hover:border-indigo-300 hover:text-indigo-600 rounded-xl cursor-pointer shadow-xs transition-all whitespace-nowrap shrink-0"
+                >
+                  <Plus className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                  <span>Add OT Setup</span>
+                </button>
+              </div>
+
+              <div className="bg-white border border-slate-100 rounded-xl overflow-hidden">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                      <th className="p-3 pl-4">Employee</th>
+                      <th className="p-3">Date</th>
+                      <th className="p-3">OT Start</th>
+                      <th className="p-3">OT End</th>
+                      <th className="p-3">Hours</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3 pr-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
+                    {otRecords.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="p-4 text-center text-slate-400 font-semibold">
+                          No overtime records yet
+                        </td>
+                      </tr>
+                    )}
+                    {otRecords.map((r) => (
+                      <tr key={r.id} className="hover:bg-slate-50/40">
+                        <td className="p-3 pl-4 font-bold text-slate-800">
+                          <span className="inline-flex items-center gap-2">
+                            <span className="h-6 w-6 rounded bg-novora/10 text-novora font-extrabold flex items-center justify-center text-[10px]">{r.initials}</span>
+                            {r.name}
+                          </span>
+                        </td>
+                        <td className="p-3 font-semibold text-slate-500">{r.date}</td>
+                        <td className="p-3 font-mono font-bold text-slate-600">{r.start}</td>
+                        <td className="p-3 font-mono font-bold text-slate-600">{r.end}</td>
+                        <td className="p-3 font-extrabold text-novora font-mono">{r.hrs}</td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            r.status === 'APPROVED' || r.status === 'APPROVE'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                              : r.status === 'REJECTED' || r.status === 'REJECT'
+                              ? 'bg-rose-50 text-rose-700 border border-rose-100'
+                              : 'bg-amber-50 text-amber-700 border border-amber-100'
+                          }`}>
+                            {r.status}
+                          </span>
+                        </td>
+                        <td className="p-3 pr-4 text-right space-x-1">
+                          {(r.status === 'PENDING' || r.status === 'SUBMITTED') && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void handleDecideOt(r.id, 'APPROVE')}
+                                className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 px-2 py-1 rounded-lg border border-emerald-150 text-[10px] cursor-pointer font-bold"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleDecideOt(r.id, 'REJECT')}
+                                className="bg-rose-50 text-rose-700 hover:bg-rose-100 px-2 py-1 rounded-lg border border-rose-150 text-[10px] cursor-pointer font-bold"
+                              >
+                                Reject
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Right Card OT Policy current configurations */}
+            <div className="xl:col-span-6 nv-card p-6 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800 tracking-tight">OT Policy &mdash; Current Settings</h4>
+                  <p className="text-[11px] font-semibold text-slate-400 mt-0.5">Corporate compliance thresholds</p>
+                </div>
+                <button
+                  onClick={() => {
+                    if (!otPolicy[0]) {
+                      addToast('No OT policies loaded from the server yet.', 'info')
+                      return
+                    }
+                    setSelectedPolicyIndex(0);
+                    setPolicyEditValue(otPolicy[0].value);
+                    setOtPolicyModalOpen(true);
+                  }}
+                  className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 font-bold text-xs px-3 py-1.5 rounded-xl transition-all cursor-pointer"
+                >
+                  Configure Rules
+                </button>
+              </div>
+
+              <div className="divide-y divide-slate-100 text-xs leading-relaxed">
+                {otPolicy.length === 0 && (
+                  <p className="text-xs font-semibold text-slate-400 py-2">No OT policies configured yet</p>
+                )}
+                {otPolicy.map((p, index) => (
+                  <div
+                    key={index}
+                    onClick={() => {
+                      setSelectedPolicyIndex(index);
+                      setPolicyEditValue(p.value);
+                      setOtPolicyModalOpen(true);
+                    }}
+                    className="py-2.5 flex items-center justify-between first:pt-0 last:pb-0 hover:bg-slate-100/50 px-2 rounded-lg transition-colors cursor-pointer group"
+                    title="Click override parameters for this specific item"
+                  >
+                    <span className="font-bold text-slate-600 flex items-center gap-2">
+                      {p.label}
+                      <span className="text-[9px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity font-normal flex items-center gap-0.5 border border-slate-200 px-1 rounded">
+                        <Edit2 className="h-2 w-2" /> click to edit
+                      </span>
+                    </span>
+                    <span className={`font-extrabold ${p.isGreen ? 'text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded border border-emerald-100' : 'text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-200'}`}>
+                      {p.value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 9. REPORTS SUB-TAB */}
+        {activeSubTab === 'Reports' && (
+          <div className="space-y-6">
+            
+            {/* 1. Statistics KPI Summary Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 nv-stagger">
+              <div className="nv-card p-4 shadow-sm flex items-center justify-between">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Adherence Rate</span>
+                  <h3 className="text-xl font-extrabold text-slate-800 tracking-tight">{reportStats.adherence}</h3>
+                  <span className="text-[9px] font-bold text-emerald-500 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">Present or late, excl. leave</span>
+                </div>
+                <div className="h-10 w-10 rounded-xl bg-sky-50 border border-sky-100/60 flex items-center justify-center">
+                  <UserCheck className="h-5 w-5 text-sky-500" />
+                </div>
+              </div>
+
+              <div className="nv-card p-4 shadow-sm flex items-center justify-between">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Overtime</span>
+                  <h3 className="text-xl font-extrabold text-novora tracking-tight">{reportStats.overtimeHours.toFixed(1)} hrs</h3>
+                  <span className="text-[9px] font-bold text-novora bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">Approved, across {reportStats.overtimeStaff} staff</span>
+                </div>
+                <div className="h-10 w-10 rounded-xl bg-blue-50 border border-blue-100/60 flex items-center justify-center">
+                  <Clock className="h-5 w-5 text-novora" />
+                </div>
+              </div>
+
+              <div className="nv-card p-4 shadow-sm flex items-center justify-between">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-sans">Avg Punctuality</span>
+                  <h3 className="text-xl font-extrabold text-slate-850 tracking-tight">{reportStats.punctuality}</h3>
+                  <span className="text-[9px] font-bold text-rose-500 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-100">{reportStats.lateCount} late {reportStats.lateCount === 1 ? 'arrival' : 'arrivals'}</span>
+                </div>
+                <div className="h-10 w-10 rounded-xl bg-rose-50 border border-rose-100/60 flex items-center justify-center">
+                  <AlertCircle className="h-5 w-5 text-rose-500" />
+                </div>
+              </div>
+
+              <div className="nv-card p-4 shadow-sm flex items-center justify-between">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Absences</span>
+                  <h3 className="text-xl font-extrabold text-rose-600 tracking-tight">{reportStats.absences} {reportStats.absences === 1 ? 'day' : 'days'}</h3>
+                  <span className="text-[9px] font-bold text-slate-500 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-200">Selected month</span>
+                </div>
+                <div className="h-10 w-10 rounded-xl bg-rose-50/50 border border-rose-100 flex items-center justify-center">
+                  <UserX className="h-5 w-5 text-rose-600" />
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Departmental Compliance and Operations Log Matrix */}
+            <div className="nv-card p-5 shadow-sm space-y-4">
+              <div>
+                <h4 className="text-xs font-bold text-slate-800 tracking-tight flex items-center gap-2">
+                  <Network className="h-4 w-4 text-novora" />
+                  <span>Corporate Departmental Attendance & Compliance Scoreboard</span>
+                </h4>
+                <p className="text-[10px] font-semibold text-slate-400 mt-0.5">Summary metrics and analytical variance parameters for organizational business units</p>
+              </div>
+
+              <div className="bg-white border border-slate-100 rounded-xl overflow-hidden">
+                <table className="w-full text-left text-xs text-slate-700">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                      <th className="p-3 pl-4">Department Unit</th>
+                      <th className="p-3">Staff Size</th>
+                      <th className="p-3 text-center">Avg Worked Hours</th>
+                      <th className="p-3 text-center">Punctuality Score</th>
+                      <th className="p-3 text-center">Approved Overtime</th>
+                      <th className="p-3 text-center">Absence Incidents</th>
+                      <th className="p-3 pr-4 text-right">Attendance Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {reportStats.departments.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="p-6 text-center text-xs text-slate-400">No attendance records for this month yet.</td>
+                      </tr>
+                    )}
+                    {reportStats.departments.map((d) => (
+                      <tr key={d.dept} className="hover:bg-slate-50/40">
+                        <td className="p-3 pl-4 font-bold text-slate-800">{d.dept}</td>
+                        <td className="p-3 font-semibold text-slate-500">{d.staff} staff</td>
+                        <td className="p-3 text-center font-mono font-bold text-slate-600">{d.avgHours}</td>
+                        <td className="p-3 text-center font-semibold text-emerald-600">{d.punctuality}</td>
+                        <td className="p-3 text-center font-mono text-slate-600">{d.ot.toFixed(1)} hrs</td>
+                        <td className={`p-3 text-center font-bold ${d.absences > 0 ? 'text-rose-500' : 'text-slate-400'}`}>{d.absences} {d.absences === 1 ? 'event' : 'events'}</td>
+                        <td className="p-3 pr-4 text-right">
+                          <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-md font-extrabold text-[10px]">{d.attendance}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 3. Reports Controls & Input Filters */}
+            <div className="flex flex-col sm:flex-row flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                <button
+                  onClick={() => setReportType('detail')}
+                  className={`px-3.5 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                    reportType === 'detail'
+                      ? 'bg-slate-100 text-novora ring-1 ring-slate-200 shadow-sm font-extrabold'
+                      : 'text-slate-400 hover:text-slate-700'
+                  }`}
+                >
+                  Detail report
+                </button>
+                <button
+                  onClick={() => setReportType('summary')}
+                  className={`px-3.5 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                    reportType === 'summary'
+                      ? 'bg-slate-100 text-novora ring-1 ring-slate-200 shadow-sm font-extrabold'
+                      : 'text-slate-400 hover:text-slate-700'
+                  }`}
+                >
+                  Summary report
+                </button>
+
+                {/* Search query box */}
+                <div className="relative w-full sm:w-48">
+                  <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search staff name..."
+                    value={reportsFilterEmp}
+                    onChange={(e) => setReportsFilterEmp(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-novora pl-8.5 pr-3 py-1.5 focus:bg-white rounded-xl text-xs font-bold text-slate-700 transition-colors"
+                  />
+                </div>
+
+                {/* Department drop selections */}
+                <SelectMenu
+                  value={reportsFilterDept}
+                  onChange={setReportsFilterDept}
+                  className="w-auto shrink-0"
+                  triggerClassName="nv-select-trigger--toolbar min-w-[8rem]"
+                  aria-label="Report department"
+                  options={departmentFilterOptions.map((d) => ({ value: d, label: d }))}
+                />
+
+                                <SelectMenu
+                  value={reportMonth}
+                  onChange={setReportMonth}
+                  className="w-auto shrink-0"
+                  triggerClassName="nv-select-trigger--toolbar min-w-[8rem]"
+                  aria-label="Report month"
+                  options={reportMonthOptions}
+                />
+              </div>
+
+              <button
+                onClick={() => addToast('Structuring and compiling audit report CSV...', 'success')}
+                className="w-full sm:w-auto bg-novora hover:bg-opacity-95 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1.5"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span>Export Report</span>
+              </button>
+            </div>
+
+            {/* 4. Filtered Reports Table */}
+            <div className="nv-card p-4 shadow-sm overflow-hidden0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <th className="pb-3 pl-3">Employee</th>
+                      <th className="pb-3">Date</th>
+                      <th className="pb-3">Shift</th>
+                      <th className="pb-3">Clock In</th>
+                      <th className="pb-3">Clock Out</th>
+                      <th className="pb-3 text-center">Work Hours</th>
+                      <th className="pb-3 text-center text-red-500">Late Arrival</th>
+                      <th className="pb-3 text-center text-novora">OT Hours</th>
+                      <th className="pb-3 pr-3 text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {reportsRows
+                      .filter(row => {
+                        if (!row.date.startsWith(reportMonth)) return false;
+                        if (reportsFilterDept !== 'All departments' && row.dept !== reportsFilterDept) return false;
+                        // Filter by search query
+                        if (reportsFilterEmp.trim() !== '') {
+                          if (!row.name.toLowerCase().includes(reportsFilterEmp.toLowerCase())) return false;
+                        }
+                        return true;
+                      })
+                      .map((row, idx) => {
+                        let textClass = 'bg-slate-50 border-slate-100 text-slate-600';
+                        if (row.status === 'Completed') {
+                          textClass = 'bg-emerald-50 text-emerald-600 border-emerald-100 font-bold';
+                        } else if (row.status === 'Leave') {
+                          textClass = 'bg-amber-50 text-amber-600 border-amber-100';
+                        } else if (row.status === 'Late') {
+                          textClass = 'bg-sky-50 text-sky-600 border-sky-100';
+                        } else if (row.status === 'Absent') {
+                          textClass = 'bg-rose-50 text-rose-600 border-rose-100';
+                        }
+
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50/20 transition-colors">
+                            <td className="py-3.5 pl-3 font-extrabold text-slate-850 flex items-center gap-2">
+                              <span className="h-6 w-6 rounded bg-novora/10 text-novora font-bold flex items-center justify-center text-[10px]">{row.initials}</span>
+                              {row.name}
+                            </td>
+                            <td className="py-3.5 font-semibold text-slate-500">{row.date}</td>
+                            <td className="py-3.5 font-semibold text-slate-600">{row.shift}</td>
+                            <td className="py-3.5 font-mono font-bold text-slate-700">{row.in}</td>
+                            <td className="py-3.5 font-mono font-bold text-slate-700">{row.out}</td>
+                            <td className="py-3.5 text-center font-mono font-bold text-slate-500">{row.hrs}</td>
+                            <td className="py-3.5 text-center font-mono font-extrabold text-red-500">{row.late}</td>
+                            <td className="py-3.5 text-center font-bold font-mono text-novora">{row.ot}</td>
+                            <td className="py-3.5 pr-3 text-right">
+                              <span className={`px-2.5 py-1 border rounded-md text-[10px] font-extrabold ${textClass}`}>
+                                {row.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 2. SHIFT PATTERNS ADDITION MODAL CONTAINER */}
+      {shiftModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="nv-card w-full max-w-md p-6 shadow-xl space-y-5 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h4 className="text-sm font-bold text-slate-850 tracking-tight">Create Corporate Shift Pattern</h4>
+              <button type="button" onClick={() => setShiftModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateShiftPattern} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 block uppercase">Pattern Name</label>
+                <input
+                  type="text"
+                  required
+                  value={newShift.name}
+                  onChange={(e) => setNewShift(prev => ({ ...prev, name: e.target.value }))}
+                  className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl"
+                  placeholder="e.g. Afternoon Shift, EMEA Support"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 block uppercase">Work Hours</label>
+                  <input
+                    type="text"
+                    value={newShift.hours}
+                    onChange={(e) => setNewShift(prev => ({ ...prev, hours: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 block uppercase">Break Hours</label>
+                  <input
+                    type="text"
+                    value={newShift.breakTime}
+                    onChange={(e) => setNewShift(prev => ({ ...prev, breakTime: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 block uppercase">Allow In (OT)</label>
+                  <input
+                    type="text"
+                    value={newShift.allowInOT}
+                    onChange={(e) => setNewShift(prev => ({ ...prev, allowInOT: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 block uppercase">Allow Out (OT)</label>
+                  <input
+                    type="text"
+                    value={newShift.allowOutOT}
+                    onChange={(e) => setNewShift(prev => ({ ...prev, allowOutOT: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 block uppercase">Night Shift</label>
+                  <SelectMenu
+                    value={newShift.nightShift}
+                    onChange={(v) => setNewShift(prev => ({ ...prev, nightShift: v }))}
+                    triggerClassName="text-xs font-bold bg-slate-50 border-slate-200"
+                    options={[
+                      { value: 'No', label: 'No' },
+                      { value: 'Yes', label: 'Yes' },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShiftModalOpen(false)}
+                  className="bg-white border border-slate-200 text-slate-600 font-bold text-xs px-4 py-2 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-novora hover:bg-opacity-95 text-white font-bold text-xs px-4 py-2 rounded-xl"
+                >
+                  Create Pattern
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. CREATE TIMESHEET MODAL */}
+      {timesheetModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="nv-card w-full max-w-md p-6 shadow-xl space-y-5 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h4 className="text-sm font-bold text-slate-850 tracking-tight flex items-center gap-2">
+                <PlusCircle className="h-4 w-4 text-novora" />
+                <span>Create Corporate Timesheet</span>
+              </h4>
+              <button type="button" onClick={() => setTimesheetModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateTimesheetSubmit} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-slate-400 block uppercase">Employee Record</label>
+                <SelectMenu
+                  value={newTimesheet.employeeId}
+                  onChange={(v) => setNewTimesheet(prev => ({ ...prev, employeeId: v }))}
+                  placeholder="-- Choose employee --"
+                  preferUp
+                  triggerClassName="text-xs font-bold bg-slate-50 border-slate-200"
+                  options={[
+                    { value: '', label: '-- Choose employee --' },
+                    ...rosterData.map(r => ({
+                      value: r.id,
+                      label: `${r.name} · ${r.dept}`,
+                    })),
+                  ]}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Shift Layout</label>
+                  <SelectMenu
+                    value={newTimesheet.shift}
+                    onChange={(v) => setNewTimesheet(prev => ({ ...prev, shift: v }))}
+                    triggerClassName="text-xs font-bold bg-slate-50 border-slate-200"
+                    options={[
+                      { value: 'Standard shift', label: 'Standard shift' },
+                      { value: 'Flexible shift', label: 'Flexible shift' },
+                      { value: 'Night shift', label: 'Night shift' },
+                      { value: 'PM split shift', label: 'PM split shift' },
+                    ]}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Duty Days Pattern</label>
+                  <input
+                    type="text"
+                    required
+                    value={newTimesheet.dutyDays}
+                    onChange={(e) => setNewTimesheet(prev => ({ ...prev, dutyDays: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl"
+                    placeholder="e.g. Mon-Fri"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Date From</label>
+                  <input
+                    type="text"
+                    required
+                    value={newTimesheet.start}
+                    onChange={(e) => setNewTimesheet(prev => ({ ...prev, start: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Date To</label>
+                  <input
+                    type="text"
+                    required
+                    value={newTimesheet.end}
+                    onChange={(e) => setNewTimesheet(prev => ({ ...prev, end: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-slate-400 block uppercase">Total Target Work Days</label>
+                <input
+                  type="number"
+                  required
+                  value={newTimesheet.days}
+                  onChange={(e) => setNewTimesheet(prev => ({ ...prev, days: Number(e.target.value) || 22 }))}
+                  className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setTimesheetModalOpen(false)}
+                  className="bg-white border border-slate-200 text-slate-600 font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-novora hover:bg-opacity-95 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm"
+                >
+                  Publish Timesheet
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3.1 EDIT TIMESHEET MODAL CONTAINER */}
+      {editTimesheetModalOpen && selectedTimesheet && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="nv-card w-full max-w-md p-6 shadow-xl space-y-5 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h4 className="text-sm font-bold text-slate-850 tracking-tight flex items-center gap-2">
+                <Settings className="h-4 w-4 text-novora" />
+                <span>Edit Corporate Timesheet</span>
+              </h4>
+              <button type="button" onClick={() => { setEditTimesheetModalOpen(false); setSelectedTimesheet(null); }} className="text-slate-400 hover:text-slate-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditTimesheetSubmit} className="space-y-4">
+              <div className="space-y-1">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase">Employee Record (Read-Only)</span>
+                <p className="font-extrabold text-slate-700 text-xs bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                  {selectedTimesheet.name} &bull; <span className="text-slate-400 font-bold">{selectedTimesheet.dept}</span>
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Shift Layout</label>
+                  <SelectMenu
+                    value={selectedTimesheet.shift}
+                    onChange={(v) => setSelectedTimesheet(prev => prev ? { ...prev, shift: v } : null)}
+                    triggerClassName="text-xs font-bold bg-slate-50 border-slate-200"
+                    options={[
+                      { value: 'Standard', label: 'Standard' },
+                      { value: 'Std + OT', label: 'Std + OT' },
+                      { value: 'Night shift', label: 'Night shift' },
+                      { value: 'Flexible shift', label: 'Flexible shift' },
+                      { value: 'PM split shift', label: 'PM split shift' },
+                    ]}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Duty Days Pattern</label>
+                  <input
+                    type="text"
+                    required
+                    value={selectedTimesheet.dutyDays}
+                    onChange={(e) => setSelectedTimesheet(prev => prev ? { ...prev, dutyDays: e.target.value } : null)}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl focus:bg-white"
+                    placeholder="e.g. Mon-Fri"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Date From</label>
+                  <input
+                    type="text"
+                    required
+                    value={selectedTimesheet.start}
+                    onChange={(e) => setSelectedTimesheet(prev => prev ? { ...prev, start: e.target.value } : null)}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl focus:bg-white"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Date To</label>
+                  <input
+                    type="text"
+                    required
+                    value={selectedTimesheet.end}
+                    onChange={(e) => setSelectedTimesheet(prev => prev ? { ...prev, end: e.target.value } : null)}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Total Target Days</label>
+                  <input
+                    type="number"
+                    required
+                    value={selectedTimesheet.days}
+                    onChange={(e) => setSelectedTimesheet(prev => prev ? { ...prev, days: Number(e.target.value) || 22 } : null)}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl focus:bg-white"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Status</label>
+                  <SelectMenu
+                    value={selectedTimesheet.status}
+                    onChange={(v) => setSelectedTimesheet(prev => prev ? { ...prev, status: v } : null)}
+                    triggerClassName="text-xs font-bold bg-slate-50 border-slate-200"
+                    options={[
+                      { value: 'Active', label: 'Active' },
+                      { value: 'On leave', label: 'On leave' },
+                      { value: 'Suspended', label: 'Suspended' },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => { setEditTimesheetModalOpen(false); setSelectedTimesheet(null); }}
+                  className="bg-white border border-slate-200 text-slate-600 font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-novora hover:bg-opacity-95 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 4. ADD OT SETUP MODAL */}
+      {otSetupModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="nv-card w-full max-w-md p-6 shadow-xl space-y-5 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h4 className="text-sm font-bold text-slate-850 tracking-tight flex items-center gap-2">
+                <Clock className="h-4 w-4 text-emerald-500" />
+                <span>Configure Extra Hours Alignment</span>
+              </h4>
+              <button type="button" onClick={() => setOtSetupModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateOtSetupSubmit} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-slate-400 block uppercase">Select Employee For Accordance</label>
+                <SelectMenu
+                  value={newOtSetup.employeeId}
+                  onChange={(v) => setNewOtSetup(prev => ({ ...prev, employeeId: v }))}
+                  placeholder="-- Choose employee --"
+                  preferUp
+                  triggerClassName="text-xs font-bold bg-slate-50 border-slate-200"
+                  options={[
+                    { value: '', label: '-- Choose employee --' },
+                    ...employeeOptions.map(r => ({
+                      value: r.id,
+                      label: `${r.name} · ${r.dept}`,
+                    })),
+                  ]}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">OT Alignment Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={newOtSetup.date}
+                    onChange={(e) => setNewOtSetup(prev => ({ ...prev, date: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl focus:bg-white"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">Proposed Hours (e.g. 2.5)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0.5"
+                    max="12.0"
+                    required
+                    value={newOtSetup.hrs}
+                    onChange={(e) => setNewOtSetup(prev => ({ ...prev, hrs: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">OT Start Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={newOtSetup.start}
+                    onChange={(e) => setNewOtSetup(prev => ({ ...prev, start: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl focus:bg-white"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-400 block uppercase">OT End Time</label>
+                  <input
+                    type="time"
+                    required
+                    value={newOtSetup.end}
+                    onChange={(e) => setNewOtSetup(prev => ({ ...prev, end: e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 p-2 text-xs font-bold text-slate-700 rounded-xl focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setOtSetupModalOpen(false)}
+                  className="bg-white border border-slate-200 text-slate-600 font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer shadow-sm"
+                >
+                  Approve Allocation
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 5. EDIT OT POLICY MODAL */}
+      {otPolicyModalOpen && selectedPolicyIndex !== null && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="nv-card w-full max-w-sm p-6 shadow-xl space-y-5 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h4 className="text-sm font-bold text-slate-850 tracking-tight flex items-center gap-2">
+                <Settings className="h-4 w-4 text-slate-600 animate-spin" style={{ animationDuration: '6s' }} />
+                <span>Edit Compliance Policy</span>
+              </h4>
+              <button type="button" onClick={() => setOtPolicyModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveOtPolicySubmit} className="space-y-4">
+              <div className="space-y-1">
+                <span className="text-[10px] font-semibold text-slate-400 block uppercase">Policy Rule Title</span>
+                <p className="font-extrabold text-novora text-xs leading-none bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                  {otPolicy[selectedPolicyIndex]?.label}
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold text-slate-400 block uppercase">Policy Value / Threshold Limit</label>
+                <input
+                  type="text"
+                  required
+                  value={policyEditValue}
+                  onChange={(e) => setPolicyEditValue(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 p-2.5 text-xs font-bold text-slate-700 rounded-xl focus:bg-white"
+                  placeholder="e.g. 60 mins, Yes, 1.5x"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setOtPolicyModalOpen(false)}
+                  className="bg-white border border-slate-200 text-slate-600 font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="bg-novora hover:bg-opacity-95 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
+                >
+                  Save Compliance Settings
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}

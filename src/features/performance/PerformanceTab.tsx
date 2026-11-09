@@ -1,0 +1,3204 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { useCanUseHrAi } from '@/providers/AuthProvider';
+import { createLocalNumericId } from '@/lib/createLocalId'
+import {
+  Award,
+  TrendingUp,
+  Percent,
+  Sliders,
+  CheckSquare,
+  ShieldCheck,
+  ClipboardCheck,
+  BarChart3,
+  Bookmark,
+  FileBarChart,
+  User,
+  Plus,
+  Search,
+  ChevronDown,
+  Trash2,
+  Edit2,
+  RefreshCw,
+  FileText,
+  UserCheck,
+  Check,
+  X,
+  Target,
+  ArrowRight,
+  Info,
+  Calendar,
+  Layers,
+  Sparkles,
+  Download,
+  Settings
+} from 'lucide-react';
+import { DropdownAnchor, SelectMenu} from '@/components/ui';
+import {
+  ApiError,
+  createPerformanceReview,
+  fetchPerformanceReviewAiDraft,
+  fetchPerformanceReviews,
+  listEmployees,
+  type PerformanceReviewRow,
+} from '@/services';
+import ModuleHeader from '@/components/ui/ModuleHeader';
+import type { Employee } from '@/types';
+
+type UiEvaluation = {
+  id: string;
+  employeeId: string;
+  name: string;
+  reviewType: string;
+  date: string;
+  period: string;
+  status: string;
+  score: number | null;
+  rating: string | null;
+  reviewerName: string | null;
+  reviewYear: number;
+};
+
+type EvalScores = {
+  codeQuality: number | null;
+  problemSolving: number | null;
+  systemDesign: number | null;
+  sprintsCompleted: number | null;
+  bugsSLA: number | null;
+  attendance: string;
+};
+
+type ActiveEvaluation = {
+  employeeName: string;
+  empId: string;
+  reviewType: string;
+  reviewDate: string;
+  reviewPeriod: string;
+  status: string;
+  scores: EvalScores;
+};
+
+type GrantPermission = {
+  evaluator: string;
+  type: string;
+  from: string;
+  to: string;
+  status: string;
+  color: string;
+};
+
+const EMPTY_SCORES: EvalScores = {
+  codeQuality: null,
+  problemSolving: null,
+  systemDesign: null,
+  sprintsCompleted: null,
+  bugsSLA: null,
+  attendance: '',
+};
+
+const GRADE_BADGE_COLORS: Record<string, string> = {
+  A: 'bg-blue-100 text-blue-800 border-blue-200',
+  B: 'bg-green-100 text-green-800 border-green-200',
+  C: 'bg-amber-100 text-amber-800 border-amber-200',
+  D: 'bg-red-100 text-red-800 border-red-200',
+};
+
+function toLocalIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function initialsOf(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((n) => n[0]?.toUpperCase() ?? '')
+    .join('');
+}
+
+function mapReviewRow(row: PerformanceReviewRow): UiEvaluation {
+  const status = /complet|approv|done/i.test(row.status) ? 'Completed' : 'Pending';
+  const period =
+    row.reviewQuarter != null
+      ? `Q${row.reviewQuarter} ${row.reviewYear}`
+      : String(row.reviewYear);
+  let date = period;
+  if (row.createdAt) {
+    try {
+      date = new Date(row.createdAt).toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      });
+    } catch {
+      /* keep period */
+    }
+  }
+  return {
+    id: row.id,
+    employeeId: row.employeeId,
+    name: row.employeeName || '—',
+    reviewType: row.reviewType || 'Review',
+    date,
+    period,
+    status,
+    score: row.score,
+    rating: row.rating,
+    reviewerName: row.reviewerName,
+    reviewYear: row.reviewYear,
+  };
+}
+
+interface PerformanceTabProps {
+  employees: Employee[];
+  addToast: (text: string, type: 'success' | 'info' | 'error' | 'loading') => void;
+}
+
+type SubTab =
+  | 'Perf. Level'
+  | 'Perf. Grade'
+  | 'KPI Setting'
+  | 'Eval. Type'
+  | 'Eval. Category'
+  | 'Eval. Setup'
+  | 'Grant Permissions'
+  | 'Evaluation'
+  | 'Perf. Result'
+  | 'Competency List'
+  | 'Review Report'
+  | 'Employee Profile';
+
+export default function PerformanceTab({ employees, addToast }: PerformanceTabProps) {
+  const [activeSubTab, setActiveSubTab] = useState<SubTab>('Evaluation');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedDept, setSelectedDept] = useState('All departments');
+  const currentYear = new Date().getFullYear();
+  const yearOptions = [currentYear, currentYear - 1, currentYear - 2].map(String);
+  const [selectedYear, setSelectedYear] = useState(String(currentYear));
+
+  // Multi-dropdown support
+  const [deptDropdownOpen, setDeptDropdownOpen] = useState(false);
+  const [yearDropdownOpen, setYearDropdownOpen] = useState(false);
+
+  // Core Data States
+  const [levels, setLevels] = useState([
+    { no: 1, name: 'Basic', description: 'Entry-level performance expectation', employees: 148, status: 'Active' },
+    { no: 2, name: 'Intermediate', description: 'Mid-level, meets most expectations', employees: 612, status: 'Active' },
+    { no: 3, name: 'Advanced', description: 'Senior-level, consistently exceeds targets', employees: 394, status: 'Active' },
+    { no: 4, name: 'Expert', description: 'Top-tier, role model for department', employees: 130, status: 'Active' },
+  ]);
+
+  const [grades, setGrades] = useState([
+    { grade: 'A', name: 'Excellent', from: 80, to: 100, apply: 'Yes', employees: 186, color: 'text-blue-600 bg-blue-50 border-blue-200' },
+    { grade: 'B', name: 'Good', from: 65, to: 79, apply: 'Yes', employees: 542, color: 'text-green-600 bg-green-50 border-green-200' },
+    { grade: 'C', name: 'Satisfactory', from: 50, to: 64, apply: 'Yes', employees: 398, color: 'text-amber-600 bg-amber-50 border-amber-200' },
+    { grade: 'D', name: 'Needs improvement', from: 30, to: 49, apply: 'Yes', employees: 158, color: 'text-red-600 bg-red-50 border-red-200' },
+  ]);
+
+  const [attendanceKPIs, setAttendanceKPIs] = useState([
+    { from: 95, to: 100, target: '100%', score: 100, textColor: 'text-green-600', scoreColor: 'bg-green-100 text-green-800' },
+    { from: 85, to: 94, target: '85%', score: 85, textColor: 'text-blue-600', scoreColor: 'bg-blue-100 text-blue-800' },
+    { from: 70, to: 84, target: '70%', score: 70, textColor: 'text-amber-600', scoreColor: 'bg-amber-100 text-amber-800' },
+    { from: 0, to: 69, target: 'Below target', score: 0, textColor: 'text-red-500', scoreColor: 'bg-red-100 text-red-800' },
+  ]);
+
+  const [achievementKPIs, setAchievementKPIs] = useState([
+    { from: 90, to: 100, target: '100%', score: 100, textColor: 'text-green-600', scoreColor: 'bg-green-100 text-green-800' },
+    { from: 75, to: 89, target: '80%', score: 80, textColor: 'text-blue-600', scoreColor: 'bg-blue-100 text-blue-800' },
+    { from: 60, to: 74, target: '65%', score: 65, textColor: 'text-amber-600', scoreColor: 'bg-amber-100 text-amber-800' },
+    { from: 0, to: 59, target: 'Below target', score: 0, textColor: 'text-red-500', scoreColor: 'bg-red-100 text-red-800' },
+  ]);
+
+  const [evalTypes, setEvalTypes] = useState([
+    { name: 'Mid-year appraisal', every: '6 months', achieveKpi: 'No', notifyBefore: '14 days', traineeEval: 'No', appraiser: 'Direct manager', status: 'Active' },
+    { name: 'Year-end appraisal', every: '12 months', achieveKpi: 'Yes', notifyBefore: '30 days', traineeEval: 'No', appraiser: 'HOD + HR', status: 'Active' },
+    { name: 'Probation review', every: '3 months', achieveKpi: 'No', notifyBefore: '7 days', traineeEval: 'Yes', appraiser: 'Direct manager', status: 'Active' },
+    { name: 'Quarterly KPI review', every: '3 months', achieveKpi: 'Yes', notifyBefore: '7 days', traineeEval: 'No', appraiser: 'Direct manager', status: 'Active' }
+  ]);
+
+  const [evalCategories, setEvalCategories] = useState([
+    { name: 'Technical skills', type: 'Attribute', weightage: 25, scoring: '1–5 rating scale', measurement: 'Measurement index', levels: '4 levels', color: 'bg-blue-100 text-blue-800' },
+    { name: 'Communication', type: 'Attribute', weightage: 15, scoring: '1–5 rating scale', measurement: 'Measurement index', levels: '4 levels', color: 'bg-blue-100 text-blue-800' },
+    { name: 'Leadership', type: 'Competency', weightage: 20, scoring: '1–5 rating scale', measurement: 'Measurement index', levels: '4 levels', color: 'bg-sky-100 text-sky-800' },
+    { name: 'Project delivery', type: 'KPI category', weightage: 30, scoring: '% achievement', measurement: 'Target %', levels: 'Auto-calc', color: 'bg-amber-100 text-amber-800' },
+    { name: 'Attendance', type: 'Attendance KPI', weightage: 10, scoring: '% attendance', measurement: 'Attendance %', levels: 'Auto-calc', color: 'bg-teal-100 text-teal-800' }
+  ]);
+
+  const [grantPermissions, setGrantPermissions] = useState<GrantPermission[]>([]);
+
+  // Active Evaluation Assessment Form
+  const [activeEval, setActiveEval] = useState<ActiveEvaluation | null>(null);
+
+  const [evaluationsList, setEvaluationsList] = useState<UiEvaluation[]>([]);
+  const [appraiserNote, setAppraiserNote] = useState('');
+  const [aiNoteBusy, setAiNoteBusy] = useState(false);
+  const canUseHrAi = useCanUseHrAi();
+
+  const scoreText = (v: number | string | null) => (v === null || v === '' ? undefined : String(v));
+
+  const handleAiAppraiserNote = async () => {
+    if (aiNoteBusy) return;
+    if (!activeEval) {
+      addToast('Select an employee or review to start.', 'error');
+      return;
+    }
+    setAiNoteBusy(true);
+    addToast('Drafting appraiser note with Gemini…', 'loading');
+    try {
+      const result = await fetchPerformanceReviewAiDraft({
+        employeeName: activeEval.employeeName,
+        reviewType: activeEval.reviewType,
+        reviewPeriod: activeEval.reviewPeriod,
+        reviewDate: activeEval.reviewDate,
+        codeQuality: scoreText(activeEval.scores.codeQuality),
+        problemSolving: scoreText(activeEval.scores.problemSolving),
+        systemDesign: scoreText(activeEval.scores.systemDesign),
+        sprintsCompleted: scoreText(activeEval.scores.sprintsCompleted),
+        bugsSla: scoreText(activeEval.scores.bugsSLA),
+        attendance: scoreText(activeEval.scores.attendance),
+        existingNote: appraiserNote,
+      });
+      setAppraiserNote(result.draft);
+      addToast(
+        result.source === 'gemini'
+          ? 'Appraiser note ready — review before sharing.'
+          : 'Smart appraiser note ready — review before sharing.',
+        'success',
+      );
+    } catch (err) {
+      addToast(err instanceof ApiError ? err.message : 'Could not draft appraiser note.', 'error');
+    } finally {
+      setAiNoteBusy(false);
+    }
+  };
+
+  const loadReviews = useCallback(async () => {
+    try {
+      const rows = await fetchPerformanceReviews();
+      setEvaluationsList(rows.map(mapReviewRow));
+    } catch (err) {
+      setEvaluationsList([]);
+      if (!(err instanceof ApiError) || (err.status !== 401 && err.status !== 403)) {
+        addToast('Could not load performance reviews from the server.', 'error');
+      }
+    }
+  }, [addToast]);
+
+  useEffect(() => {
+    void loadReviews();
+  }, [loadReviews]);
+
+  const gradeForScore = (score: number | null, rating: string | null) => {
+    const fromRating = rating?.trim();
+    if (fromRating) return fromRating.toUpperCase();
+    if (score === null) return '—';
+    const band = grades.find((g) => score >= g.from && score <= g.to);
+    return band ? band.grade : '—';
+  };
+
+  const perfResults = evaluationsList
+    .filter((r) => (r.score !== null || r.rating) && String(r.reviewYear) === selectedYear)
+    .map((r) => {
+      const grade = gradeForScore(r.score, r.rating);
+      return {
+        id: r.id,
+        employeeId: r.employeeId,
+        name: r.name,
+        type: r.reviewType,
+        period: r.period,
+        status: r.status,
+        appraiser: r.reviewerName || '—',
+        attr: '—',
+        kpi: '—',
+        comp: '—',
+        attend: '—',
+        total: r.score !== null ? r.score : '—',
+        grade,
+        gradeColor: GRADE_BADGE_COLORS[grade[0]] || 'bg-slate-100 text-slate-700 border-slate-200',
+      };
+    })
+    .sort((a, b) => (typeof b.total === 'number' ? b.total : -1) - (typeof a.total === 'number' ? a.total : -1));
+
+  const [profileEmployeeId, setProfileEmployeeId] = useState<string | null>(null);
+
+  const [competencies, setCompetencies] = useState([
+    { name: 'Leadership', type: 'Competency', parent: '—', definition: 'Ability to guide, inspire and influence a team', color: 'bg-sky-100 text-sky-800' },
+    { name: '↳ Team motivation', type: 'Sub-comp.', parent: 'Leadership', definition: 'Keeping team morale and engagement high', color: 'bg-blue-100 text-blue-800' },
+    { name: '↳ Conflict resolution', type: 'Sub-comp.', parent: 'Leadership', definition: 'Handling disagreements constructively', color: 'bg-blue-100 text-blue-800' },
+    { name: 'Problem solving', type: 'Competency', parent: '—', definition: 'Analytical thinking and solution design', color: 'bg-sky-100 text-sky-800' },
+    { name: '↳ Root cause analysis', type: 'Sub-comp.', parent: 'Problem solving', definition: 'Identifying underlying causes of issues', color: 'bg-blue-100 text-blue-800' },
+    { name: 'Adaptability', type: 'Competency', parent: '—', definition: 'Ability to adjust to change effectively', color: 'bg-sky-100 text-sky-800' }
+  ]);
+
+  // Modals Core State
+  const [activeModal, setActiveModal] = useState<
+    | null
+    | 'level_new' | 'level_edit'
+    | 'grade_new' | 'grade_edit'
+    | 'kpi_new' | 'kpi_edit'
+    | 'type_new' | 'type_edit'
+    | 'category_new' | 'category_edit'
+    | 'setup_new'
+    | 'grant_permission' | 'view_list'
+    | 'competency_new' | 'competency_edit'
+    | 'view_report'
+    | 'evaluation_new'
+  >(null);
+
+  // Level Modal Fields
+  const [selectedLevelIndex, setSelectedLevelIndex] = useState<number | null>(null);
+  const [lvlName, setLvlName] = useState('');
+  const [lvlDesc, setLvlDesc] = useState('');
+  const [lvlStatus, setLvlStatus] = useState('Active');
+
+  // Grade Modal Fields
+  const [selectedGradeIndex, setSelectedGradeIndex] = useState<number | null>(null);
+  const [grdLetter, setGrdLetter] = useState('');
+  const [grdName, setGrdName] = useState('');
+  const [grdFrom, setGrdFrom] = useState(0);
+  const [grdTo, setGrdTo] = useState(100);
+  const [grdApply, setGrdApply] = useState('Yes');
+
+  // KPI Modal Fields
+  const [selectedKPIIndex, setSelectedKPIIndex] = useState<number | null>(null);
+  const [selectedKPIType, setSelectedKPIType] = useState<'Attendance' | 'Achievement'>('Attendance');
+  const [kpiFrom, setKpiFrom] = useState(0);
+  const [kpiTo, setKpiTo] = useState(100);
+  const [kpiTarget, setKpiTarget] = useState('100%');
+  const [kpiScore, setKpiScore] = useState(100);
+  const [kpiTypeFilter, setKpiTypeFilter] = useState('All KPI types');
+  const [catTypeFilter, setCatTypeFilter] = useState('All KPI types');
+  const [setupTypeFilter, setSetupTypeFilter] = useState('All evaluation types');
+  const [permTypeFilter, setPermTypeFilter] = useState('All evaluation types');
+  const [permStatusFilter, setPermStatusFilter] = useState('All status');
+  const [evalReviewTypeFilter, setEvalReviewTypeFilter] = useState('All review types');
+  const [evalStatusFilter, setEvalStatusFilter] = useState('All status');
+  const [evalDeptFilter, setEvalDeptFilter] = useState('All departments');
+  const [nextObjKpiType, setNextObjKpiType] = useState('Achievement KPI');
+
+  // Type Modal Fields
+  const [selectedTypeIndex, setSelectedTypeIndex] = useState<number | null>(null);
+  const [tpName, setTpName] = useState('');
+  const [tpEvery, setTpEvery] = useState('12 months');
+  const [tpAchieveKpi, setTpAchieveKpi] = useState('Yes');
+  const [tpNotify, setTpNotify] = useState('30 days');
+  const [tpTrainee, setTpTrainee] = useState('No');
+  const [tpAppraiser, setTpAppraiser] = useState('Direct manager');
+  const [tpStatus, setTpStatus] = useState('Active');
+
+  // Category Modal Fields
+  const [selectedCategoryIndex, setSelectedCategoryIndex] = useState<number | null>(null);
+  const [catName, setCatName] = useState('');
+  const [catType, setCatType] = useState('Attribute');
+  const [catWeight, setCatWeight] = useState(20);
+  const [catScoring, setCatScoring] = useState('1–5 rating scale');
+  const [catMeasurement, setCatMeasurement] = useState('Measurement index');
+  const [catLevels, setCatLevels] = useState('4 levels');
+
+  // Eval Setup Modal Fields
+  const [stpName, setStpName] = useState('');
+  const [stpType, setStpType] = useState('Year-end appraisal');
+  const [stpCategories, setStpCategories] = useState<string[]>([
+    'Technical skills (Attribute · 25%)',
+    'Communication (Attribute · 15%)',
+    'Leadership (Competency · 20%)',
+    'Project delivery (KPI · 30%)'
+  ]);
+  const [stpNextPeriod, setStpNextPeriod] = useState('Yes');
+  const [stpTrainingNeeded, setStpTrainingNeeded] = useState('Yes');
+  const [stpCareerEnabled, setStpCareerEnabled] = useState('Yes');
+  const [stpAppraiserNote, setStpAppraiserNote] = useState('Yes');
+
+  // Grant Permission Modal Fields
+  const [prmEvaluator, setPrmEvaluator] = useState('');
+  const [prmType, setPrmType] = useState('Year-end appraisal');
+  const [prmFrom, setPrmFrom] = useState('');
+  const [prmTo, setPrmTo] = useState('');
+  const [prmStatus, setPrmStatus] = useState('Active');
+
+  // View List Modal Fields
+  const [permissionViewItem, setPermissionViewItem] = useState<{ evaluator: string; type: string; details: string[] } | null>(null);
+
+  // Competency Modal Fields
+  const [selectedCompetencyIndex, setSelectedCompetencyIndex] = useState<number | null>(null);
+  const [compName, setCompName] = useState('');
+  const [compType, setCompType] = useState('Competency');
+  const [compParent, setCompParent] = useState('—');
+  const [compDef, setCompDef] = useState('');
+
+  // Selected Report for view detail Modal
+  const [reportDetailItem, setReportDetailItem] = useState<any | null>(null);
+
+  // New Evaluation Form Fields
+  const [evalEmpId, setEvalEmpId] = useState('');
+  const [evalReviewType, setEvalReviewType] = useState('Year-end appraisal');
+  const [evalReviewDate, setEvalReviewDate] = useState('');
+  const [evalReviewPeriod, setEvalReviewPeriod] = useState(`Jan–Dec ${currentYear}`);
+  
+  // Initial Scores for New Evaluation
+  const [evalCodeQuality, setEvalCodeQuality] = useState(4);
+  const [evalProblemSolving, setEvalProblemSolving] = useState(4);
+  const [evalSystemDesign, setEvalSystemDesign] = useState(4);
+  const [evalSprintsCompleted, setEvalSprintsCompleted] = useState(10);
+  const [evalBugsSLA, setEvalBugsSLA] = useState(90);
+  const [evalAttendance, setEvalAttendance] = useState('98%');
+
+  const formatDateString = (dateStr: string) => {
+    if (!dateStr) return 'Pending';
+    try {
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const year = parts[0];
+        const monthIdx = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        if (monthIdx >= 0 && monthIdx < 12) {
+          return `${day} ${months[monthIdx]} ${year}`;
+        }
+      }
+    } catch {
+      /* ignore unparseable date */
+    }
+    return dateStr;
+  };
+
+  const handleCreateEvaluation = async () => {
+    const selectedEmp = (employees || []).find((emp) => emp.id === evalEmpId);
+    if (!selectedEmp) {
+      addToast('Please select an employee for evaluation', 'error');
+      return;
+    }
+
+    let employeeId: string | undefined =
+      selectedEmp.apiId ||
+      (/^[0-9a-f-]{36}$/i.test(String(selectedEmp.id)) ? String(selectedEmp.id) : undefined);
+
+    if (!employeeId) {
+      try {
+        const listed = await listEmployees();
+        const match = listed.find(
+          (e) => e.id === selectedEmp.id || e.name === selectedEmp.name
+        );
+        employeeId = match?.apiId;
+      } catch {
+        /* fall through */
+      }
+    }
+
+    if (!employeeId) {
+      addToast('No employee UUID available for performance review.', 'error');
+      return;
+    }
+
+    const reviewYear = evalReviewDate
+      ? parseInt(evalReviewDate.split('-')[0] || '', 10) || new Date().getFullYear()
+      : new Date().getFullYear();
+
+    try {
+      const created = await createPerformanceReview({
+        employeeId,
+        reviewYear,
+        reviewType: evalReviewType || undefined,
+        status: 'Pending',
+      });
+      const mapped = mapReviewRow(created);
+      setEvaluationsList((prev) => [mapped, ...prev]);
+
+      const formattedDate = formatDateString(evalReviewDate);
+      setActiveEval({
+        employeeName: selectedEmp.name,
+        empId: selectedEmp.id,
+        reviewType: evalReviewType,
+        reviewDate: formattedDate,
+        reviewPeriod: evalReviewPeriod,
+        status: 'Pending (Grade calculation)',
+        scores: {
+          codeQuality: evalCodeQuality,
+          problemSolving: evalProblemSolving,
+          systemDesign: evalSystemDesign,
+          sprintsCompleted: evalSprintsCompleted,
+          bugsSLA: evalBugsSLA,
+          attendance: evalAttendance
+        }
+      });
+
+      setAppraiserNote('');
+      addToast(`Performance review created for ${selectedEmp.name}`, 'success');
+      setActiveModal(null);
+    } catch (err) {
+      addToast(err instanceof ApiError ? err.message : 'Could not create performance review.', 'error');
+    }
+  };
+
+  // Save Operations
+  const handleSaveLevel = () => {
+    if (!lvlName.trim()) {
+      addToast('Please enter a level name', 'error');
+      return;
+    }
+    if (activeModal === 'level_new') {
+      const newLvl = {
+        no: levels.length + 1,
+        name: lvlName,
+        description: lvlDesc || 'Performance expectations',
+        employees: createLocalNumericId() % 40,
+        status: lvlStatus
+      };
+      setLevels([...levels, newLvl]);
+      addToast(`Performance Level "${lvlName}" created successfully.`, 'success');
+    } else if (activeModal === 'level_edit' && selectedLevelIndex !== null) {
+      const updated = [...levels];
+      updated[selectedLevelIndex] = {
+        ...updated[selectedLevelIndex],
+        name: lvlName,
+        description: lvlDesc,
+        status: lvlStatus
+      };
+      setLevels(updated);
+      addToast(`Performance Level "${lvlName}" updated.`, 'success');
+    }
+    setActiveModal(null);
+  };
+
+  const handleSaveGrade = () => {
+    if (!grdLetter.trim()) {
+      addToast('Please enter a grade letter', 'error');
+      return;
+    }
+    const colorMap: Record<string, string> = {
+      'A': 'text-blue-600 bg-blue-50 border-blue-200',
+      'B': 'text-green-600 bg-green-50 border-green-200',
+      'C': 'text-amber-600 bg-amber-50 border-amber-200',
+      'D': 'text-red-600 bg-red-50 border-red-200',
+    };
+    const finalColor = colorMap[grdLetter.toUpperCase()[0]] || 'text-novora bg-novora/5 border-blue-100';
+
+    if (activeModal === 'grade_new') {
+      const newG = {
+        grade: grdLetter.toUpperCase(),
+        name: grdName || 'Performance Score Band',
+        from: Number(grdFrom),
+        to: Number(grdTo),
+        apply: grdApply,
+        employees: createLocalNumericId() % 20,
+        color: finalColor
+      };
+      setGrades([...grades, newG]);
+      addToast(`New Grade "${grdLetter}" created successfully.`, 'success');
+    } else if (activeModal === 'grade_edit' && selectedGradeIndex !== null) {
+      const updated = [...grades];
+      updated[selectedGradeIndex] = {
+        ...updated[selectedGradeIndex],
+        grade: grdLetter.toUpperCase(),
+        name: grdName,
+        from: Number(grdFrom),
+        to: Number(grdTo),
+        apply: grdApply,
+        color: finalColor
+      };
+      setGrades(updated);
+      addToast(`Grade "${grdLetter}" updated successfully.`, 'success');
+    }
+    setActiveModal(null);
+  };
+
+  const handleSaveKPI = () => {
+    const freshK = {
+      from: Number(kpiFrom),
+      to: Number(kpiTo),
+      target: kpiTarget || '100%',
+      score: Number(kpiScore),
+      textColor: Number(kpiScore) >= 80 ? 'text-green-600' : Number(kpiScore) >= 60 ? 'text-blue-600' : 'text-amber-600',
+      scoreColor: Number(kpiScore) >= 80 ? 'bg-green-100 text-green-800' : Number(kpiScore) >= 60 ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'
+    };
+
+    if (selectedKPIType === 'Attendance') {
+      if (activeModal === 'kpi_new') {
+        setAttendanceKPIs([...attendanceKPIs, freshK]);
+        addToast('New attendance rating created.', 'success');
+      } else if (selectedKPIIndex !== null) {
+        const u = [...attendanceKPIs];
+        u[selectedKPIIndex] = freshK;
+        setAttendanceKPIs(u);
+        addToast('Attendance rating updated.', 'success');
+      }
+    } else {
+      if (activeModal === 'kpi_new') {
+        setAchievementKPIs([...achievementKPIs, freshK]);
+        addToast('New achievement target bracket configured.', 'success');
+      } else if (selectedKPIIndex !== null) {
+        const u = [...achievementKPIs];
+        u[selectedKPIIndex] = freshK;
+        setAchievementKPIs(u);
+        addToast('Achievement target updated.', 'success');
+      }
+    }
+    setActiveModal(null);
+  };
+
+  const handleSaveType = () => {
+    if (!tpName.trim()) {
+      addToast('Please enter an evaluation type name', 'error');
+      return;
+    }
+    const freshT = {
+      name: tpName,
+      every: tpEvery,
+      achieveKpi: tpAchieveKpi,
+      notifyBefore: tpNotify,
+      traineeEval: tpTrainee,
+      appraiser: tpAppraiser,
+      status: tpStatus
+    };
+
+    if (activeModal === 'type_new') {
+      setEvalTypes([...evalTypes, freshT]);
+      addToast(`Evaluation Type "${tpName}" registered.`, 'success');
+    } else if (selectedTypeIndex !== null) {
+      const u = [...evalTypes];
+      u[selectedTypeIndex] = freshT;
+      setEvalTypes(u);
+      addToast(`Evaluation Type "${tpName}" updated.`, 'success');
+    }
+    setActiveModal(null);
+  };
+
+  const handleSaveCategory = () => {
+    if (!catName.trim()) {
+      addToast('Please enter a category name', 'error');
+      return;
+    }
+    const typeColorMap: Record<string, string> = {
+      'Attribute': 'bg-blue-100 text-blue-800',
+      'Competency': 'bg-sky-100 text-sky-800',
+      'KPI category': 'bg-amber-100 text-amber-800',
+      'Attendance KPI': 'bg-teal-100 text-teal-800'
+    };
+    const freshC = {
+      name: catName,
+      type: catType,
+      weightage: Number(catWeight),
+      scoring: catScoring,
+      measurement: catMeasurement,
+      levels: catLevels,
+      color: typeColorMap[catType] || 'bg-slate-100 text-slate-800'
+    };
+
+    if (activeModal === 'category_new') {
+      setEvalCategories([...evalCategories, freshC]);
+      addToast(`Category "${catName}" added.`, 'success');
+    } else if (selectedCategoryIndex !== null) {
+      const u = [...evalCategories];
+      u[selectedCategoryIndex] = freshC;
+      setEvalCategories(u);
+      addToast(`Category "${catName}" updated.`, 'success');
+    }
+    setActiveModal(null);
+  };
+
+  const handleSaveSetup = () => {
+    if (!stpName.trim()) {
+      addToast('Please enter a setup name', 'error');
+      return;
+    }
+    addToast(`Setup structure "${stpName}" saved successfully with ${stpCategories.length} linked categories.`, 'success');
+    setActiveModal(null);
+  };
+
+  const handleSavePermission = () => {
+    if (!prmEvaluator) {
+      addToast('Please select an evaluator', 'error');
+      return;
+    }
+    const f: GrantPermission = {
+      evaluator: prmEvaluator,
+      type: prmType,
+      from: prmFrom,
+      to: prmTo,
+      status: prmStatus,
+      color: 'bg-indigo-100 text-indigo-800'
+    };
+    setGrantPermissions([...grantPermissions, f]);
+    addToast(`Evaluation permission added for ${prmEvaluator} (this session only).`, 'info');
+    setActiveModal(null);
+  };
+
+  const handleSaveCompetency = () => {
+    if (!compName.trim()) {
+      addToast('Please enter a competency name', 'error');
+      return;
+    }
+    const freshCp = {
+      name: compType === 'Sub-comp.' && !compName.startsWith('↳') ? `↳ ${compName}` : compName,
+      type: compType,
+      parent: compType === 'Sub-comp.' ? compParent : '—',
+      definition: compDef || 'Core capability specification requirement details',
+      color: compType === 'Competency' ? 'bg-sky-100 text-sky-800' : 'bg-blue-100 text-blue-800'
+    };
+
+    if (activeModal === 'competency_new') {
+      setCompetencies([...competencies, freshCp]);
+      addToast(`Competency "${compName}" registered.`, 'success');
+    } else if (selectedCompetencyIndex !== null) {
+      const u = [...competencies];
+      u[selectedCompetencyIndex] = freshCp;
+      setCompetencies(u);
+      addToast(`Competency "${compName}" updated.`, 'success');
+    }
+    setActiveModal(null);
+  };
+
+  const pendingReviewsFor = (evaluator: string) =>
+    evaluationsList.filter((r) => r.status === 'Pending' && r.reviewerName === evaluator);
+
+  const findEmployeeForReview = (r: { employeeId: string; name: string }) =>
+    (employees || []).find((e) => e.apiId === r.employeeId || e.id === r.employeeId) ||
+    (employees || []).find((e) => e.name === r.name);
+
+  const openReview = (item: UiEvaluation) => {
+    const emp = findEmployeeForReview(item);
+    setActiveEval({
+      employeeName: item.name,
+      empId: emp?.id || '',
+      reviewType: item.reviewType,
+      reviewDate: item.date,
+      reviewPeriod: item.period,
+      status: item.status,
+      scores: { ...EMPTY_SCORES },
+    });
+    setAppraiserNote('');
+  };
+
+  const handleExportReviews = () => {
+    if (evaluationsList.length === 0) {
+      addToast('No performance reviews to export.', 'info');
+      return;
+    }
+    const header = ['Employee', 'Review type', 'Review date', 'Review period', 'Score', 'Grade', 'Appraiser', 'Status'];
+    const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const lines = evaluationsList.map((r) =>
+      [
+        r.name,
+        r.reviewType,
+        r.date,
+        r.period,
+        r.score !== null ? String(r.score) : '',
+        gradeForScore(r.score, r.rating),
+        r.reviewerName || '',
+        r.status,
+      ].map(escape).join(',')
+    );
+    const blob = new Blob([[header.map(escape).join(','), ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `performance-reviews-${toLocalIsoDate(new Date())}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    addToast(`Exported ${evaluationsList.length} performance reviews.`, 'success');
+  };
+
+  const profileEmployee = profileEmployeeId
+    ? (employees || []).find((e) => e.id === profileEmployeeId || e.apiId === profileEmployeeId) || null
+    : null;
+  const profileReviews = profileEmployeeId
+    ? evaluationsList.filter(
+        (r) =>
+          r.employeeId === profileEmployeeId ||
+          (profileEmployee !== null && (r.employeeId === profileEmployee.apiId || r.employeeId === profileEmployee.id))
+      )
+    : [];
+  const profileName = profileEmployee?.name || profileReviews[0]?.name || '';
+  const profileLatest = profileReviews.find((r) => r.score !== null || r.rating) || null;
+  const profileLatestGrade = profileLatest ? gradeForScore(profileLatest.score, profileLatest.rating) : '—';
+
+  const activeTabClass = 'bg-blue-50 text-novora';
+  const inactiveTabClass = 'text-slate-600 hover:text-slate-950 hover:bg-slate-50';
+
+  const subTabsList: { id: SubTab; label: string; icon: any; countBadge?: number }[] = [
+    { id: 'Evaluation', label: 'Evaluation', icon: ClipboardCheck },
+  ];
+
+  return (
+    <div id="performance-module-wrapper" className="space-y-6 animate-in fade-in duration-200">
+      <ModuleHeader
+        title="Performance"
+        description="Goals, KPIs, and appraisal cycles."
+      />
+      {/* 1. Header/Navigation ribbon styled exactly like Claims/Benefits */}
+      <div id="performance-module-navigator" className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 border-b border-slate-200/85 pb-4">
+        {/* Navigation Tabs Pillbox Grid */}
+        <div id="performance-navigation-pills" className="flex items-center gap-2 select-none overflow-x-auto w-full xl:w-auto scrollbar-none py-1">
+          {subTabsList.map((tab) => {
+            const IconComponent = tab.icon;
+            const isActive = activeSubTab === tab.id;
+            return (
+              <button
+                id={`perf-sub-tab-${tab.id.replace(/\s+/g, '-').replace(/\./g, '').toLowerCase()}`}
+                key={tab.id}
+                onClick={() => {
+                  setActiveSubTab(tab.id);
+                  addToast(`Switched workspace panel to ${tab.label}`, 'info');
+                }}
+                className={`text-xs font-bold px-3.5 py-2.5 rounded-xl transition-all shrink-0 relative cursor-pointer flex items-center gap-1.5 ${
+                  isActive ? activeTabClass : inactiveTabClass
+                }`}
+              >
+                <IconComponent className="h-3.5 w-3.5" />
+                <span>{tab.label}</span>
+                {tab.countBadge !== undefined && (
+                  <span className="font-extrabold text-[10px] h-4.5 min-w-4.5 px-1.5 rounded-full flex items-center justify-center bg-amber-100 text-amber-800 border border-amber-200 animate-pulse shrink-0">
+                    {tab.countBadge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Global filter block on the right aligned nicely */}
+        <div id="performance-filters" className="flex items-center gap-2.5 ml-auto sm:ml-0 font-sans text-slate-700 shrink-0 flex-nowrap">
+          <DropdownAnchor
+            open={yearDropdownOpen}
+            onClose={() => setYearDropdownOpen(false)}
+            align="right"
+          >
+            <button
+              type="button" aria-expanded={yearDropdownOpen}
+              onClick={() => {
+                setDeptDropdownOpen(false)
+                setYearDropdownOpen(!yearDropdownOpen)
+              }}
+              className={`nv-dd-trigger ${yearDropdownOpen ? 'nv-dd-trigger--open' : ''}`}
+            >
+              <span className="whitespace-nowrap">{selectedYear}</span>
+              <ChevronDown className="nv-chevron-down nv-chevron-down--sm" />
+            </button>
+            {yearDropdownOpen && (
+              <div className="nv-dropdown-menu w-24">
+                {yearOptions.map((y) => (
+                  <button
+                    key={y}
+                    type="button"
+                    aria-selected={selectedYear === y}
+                    onClick={() => {
+                      setSelectedYear(y);
+                      setYearDropdownOpen(false);
+                      addToast(`Performance analysis year set to ${y}`, 'info');
+                    }}
+                    className={selectedYear === y ? 'nv-dropdown-item--active' : ''}
+                  >
+                    {y}
+                  </button>
+                ))}
+              </div>
+            )}
+          </DropdownAnchor>
+
+          <DropdownAnchor
+            open={deptDropdownOpen}
+            onClose={() => setDeptDropdownOpen(false)}
+            align="right"
+          >
+            <button
+              type="button" aria-expanded={deptDropdownOpen}
+              onClick={() => {
+                setYearDropdownOpen(false)
+                setDeptDropdownOpen(!deptDropdownOpen)
+              }}
+              className={`nv-dd-trigger ${deptDropdownOpen ? 'nv-dd-trigger--open' : ''}`}
+            >
+              <span className="whitespace-nowrap">{selectedDept}</span>
+              <ChevronDown className="nv-chevron-down nv-chevron-down--sm" />
+            </button>
+            {deptDropdownOpen && (
+              <div className="nv-dropdown-menu w-44">
+                {['All departments', 'Engineering', 'Finance', 'HR', 'Marketing', 'Operations'].map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    aria-selected={selectedDept === d}
+                    onClick={() => {
+                      setSelectedDept(d);
+                      setDeptDropdownOpen(false);
+                      addToast(`Department filter adjusted: ${d}`, 'info');
+                    }}
+                    className={selectedDept === d ? 'nv-dropdown-item--active' : ''}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            )}
+          </DropdownAnchor>
+
+          <button
+            type="button"
+            onClick={handleExportReviews}
+            className="nv-toolbar-btn"
+          >
+            <Download className="h-4 w-4" />
+            <span>Export</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 2. RENDER THE DETAILED ACTIVE SUB-TAB VIEWPORT PANEL */}
+      <div id="performance-tab-viewport" className="nv-card p-6 shadow-xs min-h-[450px]">
+        
+        {/* ==================== SUB-TAB 1: PERF LEVEL ==================== */}
+        {activeSubTab === 'Perf. Level' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between pb-2">
+              <div className="relative w-72">
+                <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Search level..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full text-xs pl-9 pr-4 py-1.5 border border-slate-200 rounded-xl outline-none"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  setLvlName('');
+                  setLvlDesc('');
+                  setLvlStatus('Active');
+                  setSelectedLevelIndex(null);
+                  setActiveModal('level_new');
+                }}
+                className="h-9 inline-flex items-center gap-1 px-4 text-xs font-bold text-white bg-novora hover:bg-blue-700 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>New Level</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px] tracking-wide">
+                    <th className="pb-3 pl-2">No.</th>
+                    <th className="pb-3">Level name</th>
+                    <th className="pb-3">Description</th>
+                    <th className="pb-3">Employees</th>
+                    <th className="pb-3">Status</th>
+                    <th className="pb-3 text-right pr-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {levels
+                    .filter(l => l.name.toLowerCase().includes(searchQuery.toLowerCase()))
+                    .map((item, idx) => (
+                      <tr key={item.no} className="hover:bg-slate-50/45 transition-colors">
+                        <td className="py-3 pl-2 font-semibold text-slate-900">{item.no}</td>
+                        <td className="py-3 font-bold text-slate-800">{item.name}</td>
+                        <td className="py-3 text-slate-500">{item.description}</td>
+                        <td className="py-3">
+                          <button
+                            onClick={() => addToast(`Opening team alignment list for ${item.name}`, 'info')}
+                            className="text-novora font-bold hover:underline"
+                          >
+                            {item.employees}
+                          </button>
+                        </td>
+                        <td className="py-3">
+                          <span className="bg-green-55/70 text-emerald-700 border border-emerald-100 text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center whitespace-nowrap shrink-0">
+                            {item.status}
+                          </span>
+                        </td>
+                        <td className="py-3 text-right pr-2">
+                          <button
+                            title="Edit"
+                            onClick={() => {
+                              setSelectedLevelIndex(idx);
+                              setLvlName(item.name);
+                              setLvlDesc(item.description);
+                              setLvlStatus(item.status);
+                              setActiveModal('level_edit');
+                            }}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-novora hover:bg-slate-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 2: PERF GRADE ==================== */}
+        {activeSubTab === 'Perf. Grade' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between pb-2">
+              <div className="relative w-72">
+                <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Search grade..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full text-xs pl-9 pr-4 py-1.5 border border-slate-200 rounded-xl outline-none"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  setGrdLetter('');
+                  setGrdName('');
+                  setGrdFrom(0);
+                  setGrdTo(100);
+                  setGrdApply('Yes');
+                  setSelectedGradeIndex(null);
+                  setActiveModal('grade_new');
+                }}
+                className="h-9 inline-flex items-center gap-1 px-4 text-xs font-bold text-white bg-novora hover:bg-blue-700 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>New Grade</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px] tracking-wide">
+                    <th className="pb-3 pl-2">Grade</th>
+                    <th className="pb-3">Grade name</th>
+                    <th className="pb-3">Mark from</th>
+                    <th className="pb-3">Mark to</th>
+                    <th className="pb-3">Apply for performance</th>
+                    <th className="pb-3">Employees</th>
+                    <th className="pb-3 text-right pr-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {grades
+                    .filter(g => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
+                    .map((item, idx) => (
+                      <tr key={item.grade} className="hover:bg-slate-50/45 transition-colors">
+                        <td className="py-2.5 pl-2">
+                          <div className={`h-8 w-8 rounded-lg border font-black text-xs flex items-center justify-center ${item.color}`}>
+                            {item.grade}
+                          </div>
+                        </td>
+                        <td className="py-2.5 font-bold text-slate-800">{item.name}</td>
+                        <td className="py-2.5 font-mono font-medium text-slate-600">{item.from}</td>
+                        <td className="py-2.5 font-mono font-medium text-slate-600">{item.to}</td>
+                        <td className="py-2.5">
+                          <span className="bg-green-50 text-emerald-700 border border-green-150 text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center whitespace-nowrap shrink-0">
+                            {item.apply}
+                          </span>
+                        </td>
+                        <td className="py-2.5">
+                          <button
+                            onClick={() => addToast(`Opening filtered roster for Grade ${item.grade}`, 'info')}
+                            className="text-novora font-bold hover:underline"
+                          >
+                            {item.employees === 0 ? '—' : item.employees}
+                          </button>
+                        </td>
+                        <td className="py-2.5 text-right pr-2">
+                          <button
+                            title="Edit"
+                            onClick={() => {
+                              setSelectedGradeIndex(idx);
+                              setGrdLetter(item.grade);
+                              setGrdName(item.name);
+                              setGrdFrom(item.from);
+                              setGrdTo(item.to);
+                              setGrdApply(item.apply);
+                              setActiveModal('grade_edit');
+                            }}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-novora hover:bg-slate-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 3: KPI SETTING ==================== */}
+        {activeSubTab === 'KPI Setting' && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-50">
+              <SelectMenu
+                value={kpiTypeFilter}
+                onChange={setKpiTypeFilter}
+                aria-label="KPI type filter"
+                className="w-auto"
+                triggerClassName="bg-white border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-600 font-bold"
+                options={[
+                  { value: 'All KPI types', label: 'All KPI types' },
+                  { value: 'Attendance KPI', label: 'Attendance KPI' },
+                  { value: 'Achievement KPI', label: 'Achievement KPI' },
+                ]}
+              />
+              <button
+                onClick={() => {
+                  setSelectedKPIType('Attendance');
+                  setKpiFrom(0);
+                  setKpiTo(100);
+                  setKpiTarget('100%');
+                  setKpiScore(100);
+                  setSelectedKPIIndex(null);
+                  setActiveModal('kpi_new');
+                }}
+                className="h-9 inline-flex items-center gap-1 px-4 text-xs font-bold text-white bg-novora hover:bg-blue-700 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>New KPI Setting</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Left group: Attendance KPI */}
+              <div className="border border-slate-100 rounded-2xl p-4.5 bg-slate-50/30">
+                <div className="flex items-center justify-between mb-3 pb-2 border-b border-dashed border-slate-100">
+                  <h4 className="text-sm font-extrabold text-slate-800">Attendance KPI</h4>
+                  <span className="bg-blue-50 text-novora border border-blue-100 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-lg">
+                    Attendance
+                  </span>
+                </div>
+                <table className="w-full text-left text-xs font-medium text-slate-600">
+                  <thead>
+                    <tr className="text-slate-400 font-bold uppercase text-[9px] pb-2">
+                      <th>From %</th>
+                      <th>To %</th>
+                      <th>Target %</th>
+                      <th>KPI score</th>
+                      <th className="text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attendanceKPIs.map((kpi, idx) => (
+                      <tr key={idx} className="border-b border-slate-100/40 last:border-0 hover:bg-white/40">
+                        <td className="py-3 font-semibold text-slate-700">{kpi.from}</td>
+                        <td className="py-3 font-semibold text-slate-700">{kpi.to}</td>
+                        <td className={`py-3 font-bold ${kpi.textColor}`}>{kpi.target}</td>
+                        <td className="py-3">
+                          <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${kpi.scoreColor}`}>
+                            {kpi.score}
+                          </span>
+                        </td>
+                        <td className="py-3 text-right">
+                          <button
+                            title="Edit"
+                            onClick={() => {
+                              setSelectedKPIType('Attendance');
+                              setSelectedKPIIndex(idx);
+                              setKpiFrom(kpi.from);
+                              setKpiTo(kpi.to);
+                              setKpiTarget(kpi.target);
+                              setKpiScore(kpi.score);
+                              setActiveModal('kpi_edit');
+                            }}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-novora hover:bg-slate-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Right group: Achievement KPI */}
+              <div className="border border-slate-100 rounded-2xl p-4.5 bg-slate-50/30">
+                <div className="flex items-center justify-between mb-3 pb-2 border-b border-dashed border-slate-100">
+                  <h4 className="text-sm font-extrabold text-slate-800">Achievement KPI</h4>
+                  <span className="bg-sky-50 text-sky-700 border border-sky-150 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-lg">
+                    Achievement
+                  </span>
+                </div>
+                <table className="w-full text-left text-xs font-medium text-slate-600">
+                  <thead>
+                    <tr className="text-slate-400 font-bold uppercase text-[9px] pb-2">
+                      <th>From %</th>
+                      <th>To %</th>
+                      <th>Target %</th>
+                      <th>KPI score</th>
+                      <th className="text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {achievementKPIs.map((kpi, idx) => (
+                      <tr key={idx} className="border-b border-slate-100/40 last:border-0 hover:bg-white/40">
+                        <td className="py-3 font-semibold text-slate-700">{kpi.from}</td>
+                        <td className="py-3 font-semibold text-slate-700">{kpi.to}</td>
+                        <td className={`py-3 font-bold ${kpi.textColor}`}>{kpi.target}</td>
+                        <td className="py-3">
+                          <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${kpi.scoreColor}`}>
+                            {kpi.score}
+                          </span>
+                        </td>
+                        <td className="py-3 text-right">
+                          <button
+                            title="Edit"
+                            onClick={() => {
+                              setSelectedKPIType('Achievement');
+                              setSelectedKPIIndex(idx);
+                              setKpiFrom(kpi.from);
+                              setKpiTo(kpi.to);
+                              setKpiTarget(kpi.target);
+                              setKpiScore(kpi.score);
+                              setActiveModal('kpi_edit');
+                            }}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-novora hover:bg-slate-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 4: EVAL TYPE ==================== */}
+        {activeSubTab === 'Eval. Type' && (
+          <div className="space-y-4">
+            <div className="flex justify-end pb-2">
+              <button
+                onClick={() => {
+                  setTpName('');
+                  setTpEvery('12 months');
+                  setTpAchieveKpi('Yes');
+                  setTpNotify('30 days');
+                  setTpTrainee('No');
+                  setTpAppraiser('Direct manager');
+                  setTpStatus('Active');
+                  setSelectedTypeIndex(null);
+                  setActiveModal('type_new');
+                }}
+                className="h-9 inline-flex items-center gap-1 px-4 text-xs font-bold text-white bg-novora hover:bg-blue-700 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>New Evaluation Type</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px] tracking-wide">
+                    <th className="pb-3 pl-2">Type name</th>
+                    <th className="pb-3">Every month</th>
+                    <th className="pb-3">Achieve KPI</th>
+                    <th className="pb-3">Notify before</th>
+                    <th className="pb-3">Trainee eval.</th>
+                    <th className="pb-3">Appraiser</th>
+                    <th className="pb-3">Status</th>
+                    <th className="pb-3 text-right pr-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {evalTypes.map((item, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/45 transition-colors">
+                      <td className="py-3 pl-2 font-bold text-slate-800">{item.name}</td>
+                      <td className="py-3 font-semibold text-slate-600">{item.every}</td>
+                      <td className="py-3">
+                        <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${item.achieveKpi === 'Yes' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-slate-50 text-slate-500 border border-slate-200'}`}>
+                          {item.achieveKpi}
+                        </span>
+                      </td>
+                      <td className="py-3 text-slate-600 font-medium">{item.notifyBefore}</td>
+                      <td className="py-3">
+                        <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${item.traineeEval === 'Yes' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-slate-50 text-slate-500 border border-slate-200'}`}>
+                          {item.traineeEval}
+                        </span>
+                      </td>
+                      <td className="py-3 font-semibold text-slate-700">{item.appraiser}</td>
+                      <td className="py-3">
+                        <span className="bg-green-50 text-emerald-700 border border-green-150 text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center whitespace-nowrap shrink-0">
+                          {item.status}
+                        </span>
+                      </td>
+                      <td className="py-3 text-right pr-2">
+                        <button
+                          title="Edit"
+                          onClick={() => {
+                            setSelectedTypeIndex(idx);
+                            setTpName(item.name);
+                            setTpEvery(item.every);
+                            setTpAchieveKpi(item.achieveKpi);
+                            setTpNotify(item.notifyBefore);
+                            setTpTrainee(item.traineeEval);
+                            setTpAppraiser(item.appraiser);
+                            setTpStatus(item.status);
+                            setActiveModal('type_edit');
+                          }}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-novora hover:bg-slate-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 5: EVAL CATEGORY ==================== */}
+        {activeSubTab === 'Eval. Category' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between pb-2">
+              <SelectMenu
+                value={catTypeFilter}
+                onChange={setCatTypeFilter}
+                aria-label="Category type filter"
+                className="w-auto"
+                triggerClassName="bg-white border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-600 font-bold"
+                options={[
+                  { value: 'All KPI types', label: 'All KPI types' },
+                  { value: 'Attribute', label: 'Attribute' },
+                  { value: 'Competency', label: 'Competency' },
+                  { value: 'KPI category', label: 'KPI category' },
+                  { value: 'Attendance KPI', label: 'Attendance KPI' },
+                ]}
+              />
+              <button
+                onClick={() => {
+                  setCatName('');
+                  setCatType('Attribute');
+                  setCatWeight(20);
+                  setCatScoring('1–5 rating scale');
+                  setCatMeasurement('Measurement index');
+                  setCatLevels('4 levels');
+                  setSelectedCategoryIndex(null);
+                  setActiveModal('category_new');
+                }}
+                className="h-9 inline-flex items-center gap-1 px-4 text-xs font-bold text-white bg-novora hover:bg-blue-700 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>New Category</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px] tracking-wide">
+                    <th className="pb-3 pl-2">Category name</th>
+                    <th className="pb-3">KPI type</th>
+                    <th className="pb-3">Weightage %</th>
+                    <th className="pb-3">Scoring scheme</th>
+                    <th className="pb-3">Measurement</th>
+                    <th className="pb-3">Definition levels</th>
+                    <th className="pb-3 text-right pr-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {evalCategories.map((item, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/45 transition-colors">
+                      <td className="py-3 pl-2 font-bold text-slate-800">{item.name}</td>
+                      <td className="py-3">
+                        <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${item.color}`}>
+                          {item.type}
+                        </span>
+                      </td>
+                      <td className="py-3 font-semibold text-slate-900">{item.weightage}%</td>
+                      <td className="py-3 text-slate-500">{item.scoring}</td>
+                      <td className="py-3 text-slate-500 font-semibold">{item.measurement}</td>
+                      <td className="py-3">
+                        <span className="bg-slate-50 text-slate-600 border border-slate-200 text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center whitespace-nowrap shrink-0">
+                          {item.levels}
+                        </span>
+                      </td>
+                      <td className="py-3 text-right pr-2">
+                        <button
+                          title="Edit"
+                          onClick={() => {
+                            setSelectedCategoryIndex(idx);
+                            setCatName(item.name);
+                            setCatType(item.type);
+                            setCatWeight(item.weightage);
+                            setCatScoring(item.scoring);
+                            setCatMeasurement(item.measurement);
+                            setCatLevels(item.levels);
+                            setActiveModal('category_edit');
+                          }}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-novora hover:bg-slate-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 6: EVAL SETUP ==================== */}
+        {activeSubTab === 'Eval. Setup' && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-50">
+              <SelectMenu
+                value={setupTypeFilter}
+                onChange={setSetupTypeFilter}
+                aria-label="Evaluation type filter"
+                className="w-auto"
+                triggerClassName="bg-white border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-600 font-bold"
+                options={[
+                  { value: 'All evaluation types', label: 'All evaluation types' },
+                  { value: 'Year-end appraisal', label: 'Year-end appraisal' },
+                  { value: 'Probation review', label: 'Probation review' },
+                ]}
+              />
+              <button
+                onClick={() => {
+                  setStpName('');
+                  setStpCategories([
+                    'Technical skills (Attribute · 25%)',
+                    'Communication (Attribute · 15%)',
+                    'Leadership (Competency · 20%)',
+                    'Project delivery (KPI · 30%)'
+                  ]);
+                  setActiveModal('setup_new');
+                }}
+                className="h-9 inline-flex items-center gap-1 px-4 text-xs font-bold text-white bg-novora hover:bg-blue-700 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>New Setup</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Card 1: Year-end setup */}
+              <div className="bg-slate-50/20 border border-slate-100 p-6 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <h3 className="text-sm font-extrabold text-slate-800">Year-end appraisal — setup</h3>
+                  <span className="bg-green-50 text-emerald-700 border border-emerald-150 text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center whitespace-nowrap shrink-0">
+                    Active
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-[9.5px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                    Linked evaluation categories
+                  </span>
+                  {[
+                    'Technical skills (Attribute · 25%)',
+                    'Communication (Attribute · 15%)',
+                    'Leadership (Competency · 20%)',
+                    'Project delivery (KPI · 30%)',
+                    'Attendance (Attendance KPI · 10%)'
+                  ].map((cat, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <input id={`ye-cat-${i}`} type="checkbox" defaultChecked className="h-3.5 w-3.5 rounded-sm border-slate-300" />
+                      <label htmlFor={`ye-cat-${i}`} className="text-xs font-semibold text-slate-600 cursor-pointer">{cat}</label>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="border-t border-slate-100 pt-3 flex flex-col gap-2 text-xs font-bold text-slate-700">
+                  <div className="flex justify-between items-center bg-slate-50 p-2 rounded-lg">
+                    <span>Total weightage</span>
+                    <span className="text-emerald-600">100%</span>
+                  </div>
+                  {['Enable next period objectives', 'Enable training required', 'Enable CEP / career planning', 'Enable appraiser note'].map((opt, idx) => (
+                    <div key={idx} className="flex justify-between items-center py-0.5">
+                      <span className="font-semibold text-slate-500">{opt}</span>
+                      <span className="bg-green-50 text-emerald-700 border border-emerald-100 text-[9.5px] font-bold px-2 py-0.5 rounded-md">Yes</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Card 2: Probation review setup */}
+              <div className="bg-slate-50/20 border border-slate-100 p-6 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <h3 className="text-sm font-extrabold text-slate-800">Probation review — setup</h3>
+                  <span className="bg-green-50 text-emerald-700 border border-emerald-150 text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center whitespace-nowrap shrink-0">
+                    Active
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-[9.5px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                    Linked evaluation categories
+                  </span>
+                  {[
+                    { text: 'Technical skills (Attribute · 40%)', checked: true },
+                    { text: 'Communication (Attribute · 30%)', checked: true },
+                    { text: 'Leadership (Competency · 0%)', checked: false },
+                    { text: 'Project delivery (KPI · 0%)', checked: false },
+                    { text: 'Attendance (Attendance KPI · 30%)', checked: true }
+                  ].map((cat, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <input id={`pr-cat-${i}`} type="checkbox" defaultChecked={cat.checked} className="h-3.5 w-3.5 rounded-sm border-slate-300" />
+                      <label htmlFor={`pr-cat-${i}`} className="text-xs font-semibold text-slate-600 cursor-pointer">{cat.text}</label>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="border-t border-slate-100 pt-3 flex flex-col gap-2 text-xs font-bold text-slate-700">
+                  <div className="flex justify-between items-center bg-slate-50 p-2 rounded-lg">
+                    <span>Total weightage</span>
+                    <span className="text-emerald-600">100%</span>
+                  </div>
+                  {[
+                    { label: 'Enable next period objectives', val: 'No', style: 'bg-slate-100 text-slate-500' },
+                    { label: 'Enable training required', val: 'Yes', style: 'bg-green-100 text-green-700' },
+                    { label: 'Enable CEP / career planning', val: 'No', style: 'bg-slate-100 text-slate-500' },
+                    { label: 'Enable appraiser note', val: 'Yes', style: 'bg-green-100 text-green-700' }
+                  ].map((opt, idx) => (
+                    <div key={idx} className="flex justify-between items-center py-0.5">
+                      <span className="font-semibold text-slate-500">{opt.label}</span>
+                      <span className={`text-[9.5px] font-bold px-2 py-0.5 rounded-md ${opt.style}`}>{opt.val}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 7: GRANT PERMISSIONS ==================== */}
+        {activeSubTab === 'Grant Permissions' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between pb-2">
+              <div className="flex gap-2.5">
+                <SelectMenu
+                  value={permTypeFilter}
+                  onChange={setPermTypeFilter}
+                  aria-label="Permission evaluation type"
+                  className="w-auto"
+                  triggerClassName="bg-white border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-600 font-bold"
+                  options={[
+                    { value: 'All evaluation types', label: 'All evaluation types' },
+                    { value: 'Year-end appraisal', label: 'Year-end appraisal' },
+                    { value: 'Mid-year appraisal', label: 'Mid-year appraisal' },
+                  ]}
+                />
+                <SelectMenu
+                  value={permStatusFilter}
+                  onChange={setPermStatusFilter}
+                  aria-label="Permission status"
+                  className="w-auto"
+                  triggerClassName="bg-white border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-600 font-bold"
+                  options={[
+                    { value: 'All status', label: 'All status' },
+                    { value: 'Active', label: 'Active' },
+                    { value: 'Expired', label: 'Expired' },
+                  ]}
+                />
+              </div>
+              <button
+                onClick={() => {
+                  setPrmEvaluator(employees?.[0]?.name ?? '');
+                  setPrmType('Year-end appraisal');
+                  setPrmFrom(formatDateString(toLocalIsoDate(new Date())));
+                  setPrmTo('');
+                  setPrmStatus('Active');
+                  setActiveModal('grant_permission');
+                }}
+                className="h-9 inline-flex items-center gap-1 px-4 text-xs font-bold text-white bg-novora hover:bg-blue-700 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Grant Permission</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px] tracking-wide">
+                    <th className="pb-3 pl-2">Evaluator</th>
+                    <th className="pb-3">Evaluation type</th>
+                    <th className="pb-3">Review period from</th>
+                    <th className="pb-3">Review period to</th>
+                    <th className="pb-3">Pending</th>
+                    <th className="pb-3">Status</th>
+                    <th className="pb-3 text-right pr-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {grantPermissions.length === 0 && (
+                    <tr><td colSpan={7} className="p-6 text-center text-xs text-slate-400">No evaluation permissions granted yet.</td></tr>
+                  )}
+                  {grantPermissions.map((item, idx) => {
+                    const pendingCount = pendingReviewsFor(item.evaluator).length;
+                    return (
+                    <tr key={idx} className="hover:bg-slate-50/45 transition-colors">
+                      <td className="py-3 pl-2">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`h-7 w-7 rounded-full flex items-center justify-center font-bold text-xs ${item.color}`}>
+                            {initialsOf(item.evaluator)}
+                          </div>
+                          <span className="font-bold text-slate-800">{item.evaluator}</span>
+                        </div>
+                      </td>
+                      <td className="py-3 font-semibold text-slate-700">{item.type}</td>
+                      <td className="py-3 text-slate-500">{item.from || '—'}</td>
+                      <td className="py-3 text-slate-500">{item.to || '—'}</td>
+                      <td className="py-3">
+                        <span className={`font-bold ${pendingCount > 0 ? 'text-novora underline cursor-pointer' : 'text-emerald-600 font-semibold'}`}>
+                          {pendingCount > 0 ? `${pendingCount} employees` : '0 pending'}
+                        </span>
+                      </td>
+                      <td className="py-3">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${item.status === 'Active' ? 'bg-green-50 text-green-700 border border-green-150' : 'bg-slate-50 text-slate-500 border border-slate-200'}`}>
+                          {item.status}
+                        </span>
+                      </td>
+                      <td className="py-3 text-right pr-2 flex justify-end gap-2.5 align-middle">
+                        <button
+                          onClick={() => {
+                            setPermissionViewItem({
+                              evaluator: item.evaluator,
+                              type: item.type,
+                              details: pendingReviewsFor(item.evaluator).map((r) => r.name)
+                            });
+                            setActiveModal('view_list');
+                          }}
+                          className="font-bold text-novora hover:underline cursor-pointer"
+                        >
+                          View list
+                        </button>
+                        {item.status === 'Active' ? (
+                          <button
+                            onClick={() => {
+                              const updated = [...grantPermissions];
+                              updated[idx] = { ...updated[idx], status: 'Draft' };
+                              setGrantPermissions(updated);
+                              addToast(`Temporarily suspended evaluation permission for ${item.evaluator}`, 'info');
+                            }}
+                            className="text-red-500 border border-red-200 hover:bg-red-50 text-[11px] font-bold px-2.5 py-0.5 rounded-lg transition-all cursor-pointer"
+                          >
+                            Hold
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              const updated = [...grantPermissions];
+                              updated[idx] = { ...updated[idx], status: 'Active' };
+                              setGrantPermissions(updated);
+                              addToast(`Re-grant review authorization to ${item.evaluator}`, 'success');
+                            }}
+                            className="bg-novora hover:bg-blue-700 text-white text-[11px] font-bold px-2.5 py-0.5 rounded-lg transition-all cursor-pointer"
+                          >
+                            Re-grant
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 8: EVALUATION (THE WORKSTATION GRID) ==================== */}
+        {activeSubTab === 'Evaluation' && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between pb-3 border-b border-slate-100 gap-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <SelectMenu
+                  value={evalReviewTypeFilter}
+                  onChange={setEvalReviewTypeFilter}
+                  aria-label="Review type filter"
+                  className="w-auto"
+                  triggerClassName="bg-white border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-600 font-bold"
+                  options={[
+                    { value: 'All review types', label: 'All review types' },
+                    { value: 'Year-end appraisal', label: 'Year-end appraisal' },
+                  ]}
+                />
+                <SelectMenu
+                  value={evalStatusFilter}
+                  onChange={setEvalStatusFilter}
+                  aria-label="Evaluation status filter"
+                  className="w-auto"
+                  triggerClassName="bg-white border-slate-200 rounded-xl px-3 py-1.5 text-xs text-[#d97706] font-bold bg-amber-50"
+                  options={[
+                    { value: 'All status', label: 'All status' },
+                    { value: 'Pending', label: 'Pending' },
+                    { value: 'Completed', label: 'Completed' },
+                  ]}
+                />
+                <SelectMenu
+                  value={evalDeptFilter}
+                  onChange={setEvalDeptFilter}
+                  aria-label="Department filter"
+                  className="w-auto"
+                  triggerClassName="bg-white border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-600 font-bold"
+                  options={[
+                    { value: 'All departments', label: 'All departments' },
+                    { value: 'Engineering', label: 'Engineering' },
+                    { value: 'Operations', label: 'Operations' },
+                  ]}
+                />
+                <input
+                  type="text"
+                  placeholder="Search employee..."
+                  className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold outline-none w-48"
+                />
+              </div>
+
+              <button
+                onClick={() => {
+                  setEvalEmpId(employees?.[0]?.id ?? '');
+                  setEvalReviewType('Year-end appraisal');
+                  setEvalReviewDate(toLocalIsoDate(new Date()));
+                  setEvalReviewPeriod(`Jan–Dec ${new Date().getFullYear()}`);
+                  setEvalCodeQuality(4);
+                  setEvalProblemSolving(4);
+                  setEvalSystemDesign(4);
+                  setEvalSprintsCompleted(10);
+                  setEvalBugsSLA(90);
+                  setEvalAttendance('98%');
+                  setActiveModal('evaluation_new');
+                }}
+                className="h-9 inline-flex items-center gap-1 px-4 text-xs font-bold text-white bg-novora hover:bg-blue-700 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5 shrink-0" />
+                <span>New Evaluation</span>
+              </button>
+            </div>
+
+            {/* Split layout exactly like the screenshot */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+              {/* Left Column: Assessment Form parameters */}
+              <div className="lg:col-span-7 bg-slate-50/20 border border-slate-100 rounded-2xl p-6 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                  <h4 className="text-sm font-extrabold text-slate-800">
+                    Evaluation entry{activeEval ? ` — ${activeEval.employeeName}` : ''}
+                  </h4>
+                  {activeEval && (
+                  <span className={`${activeEval.status === 'Completed' ? 'bg-green-50 text-emerald-700 border-green-150' : 'bg-amber-100 text-amber-800 border-amber-200'} border text-[10px] font-bold px-2 py-0.5 rounded-full uppercase inline-flex items-center whitespace-nowrap shrink-0`}>
+                    {activeEval.status === 'Completed' ? 'Completed' : 'Pending'}
+                  </span>
+                  )}
+                </div>
+
+                {!activeEval ? (
+                  <div className="p-6 text-center text-xs text-slate-400">
+                    {evaluationsList.length > 0
+                      ? 'Select an employee or review to start — open a review from the list below.'
+                      : 'Select an employee or review to start — click "New Evaluation" to create one.'}
+                  </div>
+                ) : (
+                <>
+                <div className="grid grid-cols-2 gap-4 text-xs">
+                  <div>
+                    <label className="text-[10px] uppercase text-slate-400 font-bold tracking-wider block mb-1">Employee *</label>
+                    <input type="text" readOnly aria-label="Employee" value={activeEval.empId ? `${activeEval.employeeName} (${activeEval.empId})` : activeEval.employeeName} className="w-full bg-slate-50 text-slate-700 p-2 border rounded-xl outline-none" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase text-slate-400 font-bold tracking-wider block mb-1">Review type *</label>
+                    <input type="text" readOnly aria-label="Review type" value={activeEval.reviewType} className="w-full bg-slate-50 text-slate-700 p-2 border rounded-xl outline-none" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase text-slate-400 font-bold tracking-wider block mb-1">Review date *</label>
+                    <input type="text" readOnly aria-label="Review date" value={activeEval.reviewDate} className="w-full bg-slate-50 text-slate-700 p-2 border rounded-xl outline-none" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase text-slate-400 font-bold tracking-wider block mb-1">Review period</label>
+                    <input type="text" readOnly aria-label="Review period" value={activeEval.reviewPeriod} className="w-full bg-slate-50 text-slate-700 p-2 border rounded-xl outline-none" />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => addToast(`${evalCategories.length} evaluation categories are configured in Eval. Category settings.`, 'info')}
+                  className="w-full text-center py-2.5 bg-novora text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer hover:bg-opacity-90"
+                >
+                  Load category list
+                </button>
+
+                {/* Sub scoring scales */}
+                <div className="space-y-4 border-t border-slate-100 pt-4 text-xs">
+                  <div>
+                    <span className="bg-blue-50 text-novora text-[10.5px] font-black uppercase tracking-wider px-2 py-0.5 rounded">
+                      Attribute — technical skills (25%)
+                    </span>
+                    <div className="space-y-2 mt-3.5">
+                      {[
+                        { label: 'Code quality & standards', val: activeEval.scores.codeQuality },
+                        { label: 'Problem-solving ability', val: activeEval.scores.problemSolving },
+                        { label: 'System design', val: activeEval.scores.systemDesign }
+                      ].map((item, idx) => (
+                        <div key={idx} className="flex justify-between items-center bg-white p-2 border border-slate-100 rounded-lg">
+                          <span className="font-semibold text-slate-700">{item.label}</span>
+                          <div className="flex gap-1.5 items-center">
+                            {[1, 2, 3, 4, 5].map(n => (
+                              <span
+                                key={n}
+                                className={`h-5 w-5 rounded-full flex items-center justify-center font-bold text-[10px] border ${
+                                  item.val === n
+                                    ? 'bg-novora text-white border-novora'
+                                    : 'bg-slate-50 text-slate-400 border-slate-200'
+                                }`}
+                              >
+                                {n}
+                              </span>
+                            ))}
+                            <span className="font-bold text-slate-600 ml-2">{item.val ?? '—'}/5</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="bg-teal-50 text-teal-800 text-[10.5px] font-black uppercase tracking-wider px-2 py-0.5 rounded">
+                      KPI — project delivery (30%)
+                    </span>
+                    <div className="space-y-2.5 mt-3">
+                      <div className="flex justify-between items-center bg-white p-2 border border-slate-100 rounded-lg">
+                        <span className="font-semibold text-slate-700">Sprints completed on time</span>
+                        <div className="flex gap-3 items-center">
+                          <input readOnly type="number" aria-label="Sprints completed on time (%)" value={activeEval.scores.sprintsCompleted ?? ''} className="w-14 bg-slate-50 p-1 border rounded text-center font-bold" />
+                          <span className="font-bold text-emerald-600">{activeEval.scores.sprintsCompleted !== null ? `${activeEval.scores.sprintsCompleted}%` : '—'}</span>
+                        </div>
+                      </div>
+                      <div className="flex justify-between items-center bg-white p-2 border border-slate-100 rounded-lg">
+                        <span className="font-semibold text-slate-700">Bugs resolved within SLA</span>
+                        <div className="flex gap-3 items-center">
+                          <input readOnly type="number" aria-label="Bugs resolved within SLA (%)" value={activeEval.scores.bugsSLA ?? ''} className="w-14 bg-slate-50 p-1 border rounded text-center font-bold" />
+                          <span className="font-bold text-emerald-600">{activeEval.scores.bugsSLA !== null ? `${activeEval.scores.bugsSLA}%` : '—'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                </>
+                )}
+              </div>
+
+              {/* Right Column: Objectives and appraiser notes */}
+              <div className="lg:col-span-5 space-y-6">
+                <div className="bg-slate-50/20 border border-slate-100 rounded-2xl p-6 text-xs space-y-4">
+                  <h4 className="text-sm font-extrabold text-slate-800 border-b pb-2">Objectives for next period</h4>
+                  <div>
+                    <label className="text-[10px] text-slate-400 uppercase font-black block mb-1">KPI type</label>
+                    <SelectMenu
+                      value={nextObjKpiType}
+                      onChange={setNextObjKpiType}
+                      triggerClassName="font-semibold bg-white border-slate-200"
+                      options={[
+                        { value: 'Achievement KPI', label: 'Achievement KPI' },
+                        { value: 'Attendance KPI', label: 'Attendance KPI' },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 uppercase font-black block mb-1">Category / objective</label>
+                    <input type="text" placeholder="e.g. Lead frontend team next quarter" className="w-full border rounded-xl p-2 outline-none font-medium" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 uppercase font-black block mb-1">Target</label>
+                    <input type="text" placeholder="e.g. 95% sprint completion" className="w-full border rounded-xl p-2 outline-none font-medium" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 uppercase font-black block mb-1">Comment</label>
+                    <textarea rows={2} placeholder="Notes on this objective..." className="w-full border rounded-xl p-2 outline-none resize-none font-medium" />
+                  </div>
+                  <button type="button" onClick={() => addToast('Saving objectives is not available yet.', 'info')} className="w-full text-center py-2 border border-dashed border-novora font-bold text-novora rounded-xl hover:bg-novora/5 transition-colors">
+                    + Add objective
+                  </button>
+                </div>
+
+                <div className="bg-slate-50/30 border p-6 rounded-2xl text-xs space-y-3">
+                  <div className="flex items-center justify-between gap-2 border-b pb-2">
+                    <h4 className="text-sm font-extrabold text-slate-800">Appraiser note</h4>
+                    {canUseHrAi && (
+                    <button
+                      type="button"
+                      disabled={aiNoteBusy || !activeEval}
+                      onClick={() => void handleAiAppraiserNote()}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-novora/25 bg-novora/5 px-3 py-1.5 text-[11px] font-bold text-novora hover:bg-novora/10 disabled:opacity-60 cursor-pointer"
+                    >
+                      <Sparkles className={`h-3.5 w-3.5 ${aiNoteBusy ? 'animate-spin' : ''}`} />
+                      {aiNoteBusy ? 'Drafting…' : 'AI Draft'}
+                    </button>
+                    )}
+                  </div>
+                  <textarea
+                    rows={4}
+                    value={appraiserNote}
+                    onChange={(e) => setAppraiserNote(e.target.value)}
+                    placeholder="Notes and remarks from the appraiser about this evaluation period..."
+                    className="w-full bg-white border rounded-xl p-2.5 outline-none resize-none font-medium"
+                  />
+                  <p className="text-[10px] text-slate-400">AI suggests a draft only — manager reviews before sharing.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* List at the footer */}
+            <div className="border-t border-slate-100 pt-6 space-y-4">
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Evaluation list — all employees</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-600">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[9px] tracking-wide">
+                      <th className="pb-3pl-2">Employee</th>
+                      <th className="pb-3">Review type</th>
+                      <th className="pb-3">Review date</th>
+                      <th className="pb-3">Review period</th>
+                      <th className="pb-3">Status</th>
+                      <th className="pb-3 text-right pr-2">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {evaluationsList.length === 0 && (
+                      <tr><td colSpan={6} className="p-6 text-center text-xs text-slate-400">No evaluations yet.</td></tr>
+                    )}
+                    {evaluationsList.map((item, idx) => (
+                      <tr key={item.id || idx} className="hover:bg-slate-50/45 transition-colors">
+                        <td className="py-2.5 pl-2">
+                          <div className="flex items-center gap-2">
+                            <div className="h-7 w-7 rounded-lg bg-novora/10 text-novora font-black text-xs flex items-center justify-center">
+                              {item.name[0]}
+                            </div>
+                            <span className="font-bold text-slate-800">{item.name}</span>
+                          </div>
+                        </td>
+                        <td className="py-2.5 font-semibold text-slate-700">{item.reviewType}</td>
+                        <td className="py-2.5 text-slate-500">{item.date}</td>
+                        <td className="py-2.5 text-slate-500 font-mono font-medium">{item.period}</td>
+                        <td className="py-2.5">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${item.status === 'Completed' ? 'bg-green-50 text-emerald-700 border border-green-150' : 'bg-amber-50 text-amber-700 border border-amber-100'}`}>
+                            {item.status}
+                          </span>
+                        </td>
+                        <td className="py-2.5 text-right pr-2">
+                          <button
+                            onClick={() => {
+                              openReview(item);
+                              addToast(`Loaded evaluation for ${item.name}`, 'success');
+                            }}
+                            className="font-bold text-novora hover:underline"
+                          >
+                            Open
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 9: PERF RESULT ==================== */}
+        {activeSubTab === 'Perf. Result' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center pb-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Performance summaries</span>
+              <button
+                onClick={() => {
+                  void loadReviews().then(() => addToast('Grades recalculated from the latest performance reviews.', 'success'));
+                }}
+                className="bg-slate-50 border border-slate-200 hover:border-novora hover:bg-novora/10 text-slate-700 hover:text-novora text-xs font-bold px-4 py-2 rounded-xl transition-all"
+              >
+                Calculate grade
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px] tracking-wide">
+                    <th className="pb-3 pl-2">Employee</th>
+                    <th className="pb-3">Attr. score</th>
+                    <th className="pb-3">KPI score</th>
+                    <th className="pb-3">Comp. score</th>
+                    <th className="pb-3">Attend. score</th>
+                    <th className="pb-3">Total score</th>
+                    <th className="pb-3 text-center">Grade</th>
+                    <th className="pb-3 text-right pr-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {perfResults.length === 0 && (
+                    <tr><td colSpan={8} className="p-6 text-center text-xs text-slate-400">No results yet.</td></tr>
+                  )}
+                  {perfResults.map((item, idx) => (
+                    <tr key={item.id || idx} className="hover:bg-slate-50/45 transition-colors">
+                      <td className="py-2.5 pl-2 font-bold text-slate-800">{item.name}</td>
+                      <td className="py-2.5 font-mono font-medium text-slate-600">{item.attr}</td>
+                      <td className="py-2.5 font-mono font-medium text-slate-600">{item.kpi}</td>
+                      <td className="py-2.5 font-mono font-medium text-slate-600">{item.comp}</td>
+                      <td className="py-2.5 font-mono font-medium text-slate-600">{item.attend}</td>
+                      <td className="py-2.5 font-black text-blue-600 font-mono text-[13px]">{item.total}</td>
+                      <td className="py-2.5 text-center">
+                        <span className={`inline-block py-0.5 px-3 border rounded text-[11px] font-black tracking-widest ${item.gradeColor}`}>
+                          {item.grade}
+                        </span>
+                      </td>
+                      <td className="py-2.5 text-right pr-2">
+                        <button
+                          onClick={() => {
+                            setProfileEmployeeId(item.employeeId);
+                            setActiveSubTab('Employee Profile');
+                          }}
+                          className="font-bold text-novora hover:underline"
+                        >
+                          Detail
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 10: COMPETENCY LIST ==================== */}
+        {activeSubTab === 'Competency List' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between pb-2">
+              <div className="relative w-72">
+                <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Search competency..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full text-xs pl-9 pr-4 py-1.5 border border-slate-200 rounded-xl outline-none"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  setCompName('');
+                  setCompType('Competency');
+                  setCompParent('—');
+                  setCompDef('');
+                  setSelectedCompetencyIndex(null);
+                  setActiveModal('competency_new');
+                }}
+                className="h-9 inline-flex items-center gap-1 px-4 text-xs font-bold text-white bg-novora hover:bg-blue-700 rounded-xl transition-all cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>New Competency</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px] tracking-wide">
+                    <th className="pb-3 pl-2">Competency name</th>
+                    <th className="pb-3">Type</th>
+                    <th className="pb-3">Parent competency</th>
+                    <th className="pb-3">Definition</th>
+                    <th className="pb-3 text-right pr-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {competencies
+                    .filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
+                    .map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/45 transition-colors">
+                        <td className="py-3 pl-2 font-bold text-slate-800">{item.name}</td>
+                        <td className="py-3">
+                          <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${item.color}`}>
+                            {item.type}
+                          </span>
+                        </td>
+                        <td className="py-3 text-slate-500 font-semibold">{item.parent}</td>
+                        <td className="py-3 text-slate-500 mr-4 font-medium max-w-xs truncate leading-normal">{item.definition}</td>
+                        <td className="py-3 text-right pr-2">
+                          <button
+                            title="Edit"
+                            onClick={() => {
+                              setSelectedCompetencyIndex(idx);
+                              setCompName(item.name.replace('↳ ', ''));
+                              setCompType(item.type);
+                              setCompParent(item.parent);
+                              setCompDef(item.definition);
+                              setActiveModal('competency_edit');
+                            }}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-novora hover:bg-slate-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 11: REVIEW REPORT ==================== */}
+        {activeSubTab === 'Review Report' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-50">
+              <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest">Verified appraisal reports</span>
+              <button
+                onClick={handleExportReviews}
+                className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all"
+              >
+                Export all
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[10px] tracking-wide">
+                    <th className="pb-3 pl-2">Employee</th>
+                    <th className="pb-3">Review type</th>
+                    <th className="pb-3">Review period</th>
+                    <th className="pb-3">Total score</th>
+                    <th className="pb-3 text-center">Grade</th>
+                    <th className="pb-3">Appraiser</th>
+                    <th className="pb-3">Status</th>
+                    <th className="pb-3 text-right pr-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {perfResults.length === 0 && (
+                    <tr><td colSpan={8} className="p-6 text-center text-xs text-slate-400">No results yet.</td></tr>
+                  )}
+                  {perfResults.map((item, idx) => (
+                    <tr key={item.id || idx} className="hover:bg-slate-50/45 transition-colors">
+                      <td className="py-3 pl-2 font-bold text-slate-800">{item.name}</td>
+                      <td className="py-3 font-semibold text-slate-700">{item.type}</td>
+                      <td className="py-3 text-slate-500">{item.period}</td>
+                      <td className="py-3 text-blue-600 font-black font-mono text-[12.5px]">{item.total}</td>
+                      <td className="py-3 text-center">
+                        <span className={`inline-block py-0.5 px-3 border rounded text-[10px] font-black ${item.gradeColor}`}>
+                          {item.grade}
+                        </span>
+                      </td>
+                      <td className="py-3 font-semibold text-slate-700">{item.appraiser}</td>
+                      <td className="py-3">
+                        <span className={`${item.status === 'Completed' ? 'bg-green-55 text-emerald-700 border-green-150' : 'bg-amber-50 text-amber-700 border-amber-100'} border text-[10px] font-black px-2.5 py-0.5 rounded-full inline-flex items-center whitespace-nowrap shrink-0`}>
+                          {item.status}
+                        </span>
+                      </td>
+                      <td className="py-3 text-right pr-2 flex justify-end gap-2 text-slate-600 align-middle">
+                        <button
+                          onClick={() => {
+                            setReportDetailItem({
+                              name: item.name,
+                              type: item.type,
+                              period: item.period,
+                              status: item.status,
+                              attr: item.attr,
+                              kpi: item.kpi,
+                              comp: item.comp,
+                              attend: item.attend,
+                              total: item.total,
+                              grade: item.grade,
+                              gradeColor: item.gradeColor,
+                              appraiser: item.appraiser
+                            });
+                            setActiveModal('view_report');
+                          }}
+                          className="font-bold text-novora hover:underline cursor-pointer"
+                        >
+                          View
+                        </button>
+                        <button
+                          onClick={() => addToast(`PDF download for ${item.name} is not available yet.`, 'info')}
+                          className="font-bold text-slate-500 hover:text-slate-800"
+                        >
+                          PDF
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SUB-TAB 12: EMPLOYEE PROFILE ==================== */}
+        {activeSubTab === 'Employee Profile' && !profileName && (
+          <div className="p-6 text-center text-xs text-slate-400">Select an employee from Perf. Result to view their performance profile.</div>
+        )}
+        {activeSubTab === 'Employee Profile' && profileName && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            {/* Left side card block */}
+            <div className="lg:col-span-5 border border-slate-100 rounded-2xl p-6 space-y-5 bg-slate-50/20">
+              <div className="flex items-center gap-4 border-b border-slate-100 pb-4.5">
+                <div className="h-12 w-12 bg-blue-100 border border-blue-200 text-novora rounded-xl flex items-center justify-center text-lg font-black shadow-xs">
+                  {initialsOf(profileName)}
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-800 tracking-tight">{profileName}</h3>
+                  <p className="text-[10.5px] font-semibold text-slate-400 mt-1 uppercase tracking-wide">
+                    {[profileEmployee?.id, profileEmployee?.department, profileEmployee?.position].filter(Boolean).join(' • ') || '—'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-y-3.5 gap-x-4 text-xs font-semibold">
+                <div>
+                  <span className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Current grade (latest)</span>
+                  <span className="bg-blue-50 text-novora px-2.5 border border-blue-100 font-black rounded text-[11px] h-6 inline-flex items-center">{profileLatestGrade}</span>
+                </div>
+                <div>
+                  <span className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Latest score</span>
+                  <p className="text-slate-800 font-bold">{profileLatest?.score != null ? `${profileLatest.score} / 100` : '—'}</p>
+                </div>
+                <div className="col-span-2">
+                  <span className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Last review</span>
+                  <span className="text-slate-500 font-mono">
+                    {profileReviews[0] ? `${profileReviews[0].reviewType} • ${profileReviews[0].date}` : '—'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100/50 pt-2.5 flex justify-between items-center text-xs font-bold text-slate-700">
+                <span>Overall score</span>
+                <span className="text-blue-600 text-sm font-black font-mono">{profileLatest?.score != null ? `${profileLatest.score} / 100` : '—'}</span>
+              </div>
+            </div>
+
+            {/* Right side history details */}
+            <div className="lg:col-span-12 xl:col-span-7 space-y-6">
+              <div className="space-y-4">
+                <h4 className="text-sm font-extrabold text-slate-800 uppercase tracking-wide border-b pb-2">Review history</h4>
+                <div className="overflow-x-auto border rounded-xl">
+                  <table className="w-full text-left text-xs text-slate-600">
+                    <thead>
+                      <tr className="bg-slate-50/50 text-slate-400 font-bold uppercase text-[9px] tracking-wide border-b">
+                        <th className="py-2.5 pl-3">Review type</th>
+                        <th className="py-2.5">Period</th>
+                        <th className="py-2.5">Score</th>
+                        <th className="py-2.5 pr-3 text-center">Grade</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {profileReviews.length === 0 && (
+                        <tr><td colSpan={4} className="p-6 text-center text-xs text-slate-400">No reviews yet.</td></tr>
+                      )}
+                      {profileReviews.map((hist, idx) => {
+                        const grade = gradeForScore(hist.score, hist.rating);
+                        return (
+                        <tr key={hist.id || idx} className="hover:bg-slate-50/20">
+                          <td className="py-2.5 pl-3 font-semibold text-slate-800">{hist.reviewType}</td>
+                          <td className="py-2.5 text-slate-500 font-medium">{hist.period}</td>
+                          <td className="py-2.5 font-bold font-mono text-[12px] text-blue-600">{hist.score ?? '—'}</td>
+                          <td className="py-2.5 text-center pr-3">
+                            <span className={`inline-block py-0.5 px-2.5 border rounded font-black text-[10px] ${GRADE_BADGE_COLORS[grade[0]] || 'bg-slate-100 text-slate-700 border-slate-200'}`}>
+                              {grade}
+                            </span>
+                          </td>
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================================= */}
+        {/* ======================= DYNAMIC CONFIG MODAL PORTALS =================== */}
+        {/* ======================================================================= */}
+        {activeModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 overflow-y-auto">
+            <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-slate-100 flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              {/* Modal Header */}
+              <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                <h3 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+                  <span className="h-2.5 w-2.5 rounded-full bg-novora items-center shrink-0"></span>
+                  {(() => {
+                    const titles: Record<string, string> = {
+                      level_new: 'New Level',
+                      level_edit: 'Edit Level',
+                      grade_new: 'New Grade',
+                      grade_edit: 'Edit Grade',
+                      kpi_new: 'New KPI Setting',
+                      kpi_edit: 'Edit KPI Setting',
+                      type_new: 'New Evaluation Type',
+                      type_edit: 'Edit Evaluation Type',
+                      category_new: 'New Category',
+                      category_edit: 'Edit Category',
+                      setup_new: 'New Setup',
+                      grant_permission: 'Grant Permission',
+                      view_list: 'View List',
+                      competency_new: 'New Competency',
+                      competency_edit: 'Edit Competency',
+                      view_report: 'View Report',
+                      evaluation_new: 'New Evaluation',
+                    };
+                    return titles[activeModal] || activeModal;
+                  })()}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setActiveModal(null)}
+                  className="p-1 px-2.5 bg-slate-50 hover:bg-slate-100 rounded-lg text-xs font-black text-slate-400 hover:text-slate-600 transition-all cursor-pointer"
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              {/* Modal Inner Forms */}
+              <div className="flex-1 p-6 overflow-y-auto space-y-4 text-xs font-semibold text-slate-700">
+                {/* 1. LEVEL MODALS */}
+                {(activeModal === 'level_new' || activeModal === 'level_edit') && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Level name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Intermediate, Executive"
+                        value={lvlName}
+                        onChange={(e) => setLvlName(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Level description</label>
+                      <textarea
+                        rows={3}
+                        placeholder="Key responsibilities and qualifications..."
+                        value={lvlDesc}
+                        onChange={(e) => setLvlDesc(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none resize-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Status</label>
+                      <SelectMenu
+                        value={lvlStatus}
+                        onChange={setLvlStatus}
+                        triggerClassName="text-xs font-bold"
+                        options={[
+                          { value: 'Active', label: 'Active' },
+                          { value: 'Draft', label: 'Draft' },
+                        ]}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveLevel}
+                      className="w-full py-2.5 bg-novora text-white rounded-xl font-bold cursor-pointer hover:bg-blue-700 transition"
+                    >
+                      Save Level Configuration
+                    </button>
+                  </div>
+                )}
+
+                {/* 2. GRADE MODALS */}
+                {(activeModal === 'grade_new' || activeModal === 'grade_edit') && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Grade letter</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. A, B, C+, A*"
+                          value={grdLetter}
+                          onChange={(e) => setGrdLetter(e.target.value)}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Grade description</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Excellent performance"
+                          value={grdName}
+                          onChange={(e) => setGrdName(e.target.value)}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Scoring threshold from %</label>
+                        <input
+                          type="number"
+                          value={grdFrom}
+                          onChange={(e) => setGrdFrom(Number(e.target.value))}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Scoring threshold to %</label>
+                        <input
+                          type="number"
+                          value={grdTo}
+                          onChange={(e) => setGrdTo(Number(e.target.value))}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Apply for evaluation calculations</label>
+                      <SelectMenu
+                        value={grdApply}
+                        onChange={setGrdApply}
+                        triggerClassName="text-xs font-bold"
+                        options={[
+                          { value: 'Yes', label: 'Yes' },
+                          { value: 'No (Draft scale)', label: 'No (Draft scale)' },
+                        ]}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveGrade}
+                      className="w-full py-2.5 bg-novora text-white rounded-xl font-bold cursor-pointer hover:bg-blue-700 transition"
+                    >
+                      Save Grade parameters
+                    </button>
+                  </div>
+                )}
+
+                {/* 3. KPI SETTING MODALS */}
+                {(activeModal === 'kpi_new' || activeModal === 'kpi_edit') && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">KPI framework type</label>
+                        <SelectMenu
+                          value={selectedKPIType}
+                          onChange={(v) => setSelectedKPIType(v as any)}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Attendance', label: 'Attendance' },
+                            { value: 'Achievement', label: 'Achievement' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Scoring weightage</label>
+                        <input
+                          type="number"
+                          value={kpiScore}
+                          onChange={(e) => setKpiScore(Number(e.target.value))}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Percentage from %</label>
+                        <input
+                          type="number"
+                          value={kpiFrom}
+                          onChange={(e) => setKpiFrom(Number(e.target.value))}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Percentage to %</label>
+                        <input
+                          type="number"
+                          value={kpiTo}
+                          onChange={(e) => setKpiTo(Number(e.target.value))}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Goal / targets metrics</label>
+                      <input
+                        type="text"
+                        value={kpiTarget}
+                        onChange={(e) => setKpiTarget(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveKPI}
+                      className="w-full py-2.5 bg-novora text-white rounded-xl font-bold cursor-pointer hover:bg-blue-700 transition"
+                    >
+                      Save KPI parameters
+                    </button>
+                  </div>
+                )}
+
+                {/* 4. EVAL TYPE MODALS */}
+                {(activeModal === 'type_new' || activeModal === 'type_edit') && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Appraisal framework type name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Year-end appraisal, 360 Feedback"
+                        value={tpName}
+                        onChange={(e) => setTpName(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Frequency period</label>
+                        <SelectMenu
+                          value={tpEvery}
+                          onChange={setTpEvery}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: '1 month', label: '1 month' },
+                            { value: '3 months', label: '3 months' },
+                            { value: '6 months', label: '6 months' },
+                            { value: '12 months', label: '12 months' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Achieve KPI calculation</label>
+                        <SelectMenu
+                          value={tpAchieveKpi}
+                          onChange={setTpAchieveKpi}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Yes', label: 'Yes' },
+                            { value: 'No', label: 'No' },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Notification period</label>
+                        <SelectMenu
+                          value={tpNotify}
+                          onChange={setTpNotify}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: '7 days', label: '7 days' },
+                            { value: '15 days', label: '15 days' },
+                            { value: '30 days', label: '30 days' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Include self evaluation</label>
+                        <SelectMenu
+                          value={tpTrainee}
+                          onChange={setTpTrainee}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Yes', label: 'Yes' },
+                            { value: 'No', label: 'No' },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Primary appraiser</label>
+                        <SelectMenu
+                          value={tpAppraiser}
+                          onChange={setTpAppraiser}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Direct manager', label: 'Direct manager' },
+                            { value: 'Department Head', label: 'Department Head' },
+                            { value: 'Peer Group', label: 'Peer Group' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Status</label>
+                        <SelectMenu
+                          value={tpStatus}
+                          onChange={setTpStatus}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Active', label: 'Active' },
+                            { value: 'Draft', label: 'Draft' },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveType}
+                      className="w-full py-2.5 bg-novora text-white rounded-xl font-bold cursor-pointer hover:bg-blue-700 transition"
+                    >
+                      Save Evaluation Type
+                    </button>
+                  </div>
+                )}
+
+                {/* 5. EVAL CATEGORY MODALS */}
+                {(activeModal === 'category_new' || activeModal === 'category_edit') && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Category criteria name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Technical abilities, Client communication"
+                        value={catName}
+                        onChange={(e) => setCatName(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">KPI connection type</label>
+                        <SelectMenu
+                          value={catType}
+                          onChange={(v) => setCatType(v as any)}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Attribute', label: 'Attribute' },
+                            { value: 'Competency', label: 'Competency' },
+                            { value: 'KPI category', label: 'KPI category' },
+                            { value: 'Attendance KPI', label: 'Attendance KPI' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Weightage percentage %</label>
+                        <input
+                          type="number"
+                          placeholder="e.g. 25"
+                          value={catWeight === 0 ? '' : catWeight}
+                          onChange={(e) => setCatWeight(Number(e.target.value))}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Scoring system</label>
+                        <SelectMenu
+                          value={catScoring}
+                          onChange={setCatScoring}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: '1–5 rating scale', label: '1–5 rating scale' },
+                            { value: 'Pass / Fail gate', label: 'Pass / Fail gate' },
+                            { value: 'Percentage score', label: 'Percentage score' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Measurement target</label>
+                        <input
+                          type="text"
+                          value={catMeasurement}
+                          onChange={(e) => setCatMeasurement(e.target.value)}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Levels defined</label>
+                      <input
+                        type="text"
+                        value={catLevels}
+                        onChange={(e) => setCatLevels(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveCategory}
+                      className="w-full py-2.5 bg-novora text-white rounded-xl font-bold cursor-pointer hover:bg-blue-700 transition"
+                    >
+                      Save Category Settings
+                    </button>
+                  </div>
+                )}
+
+                {/* 6. EVAL SETUP MODALS */}
+                {activeModal === 'setup_new' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Assessment Template Setup Name</label>
+                      <input
+                        type="text"
+                        placeholder={`e.g. Year-end Appraisal Form ${currentYear}`}
+                        value={stpName}
+                        onChange={(e) => setStpName(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Evaluation Type</label>
+                      <SelectMenu
+                        value={stpType}
+                        onChange={setStpType}
+                        triggerClassName="text-xs font-bold"
+                        options={[
+                          { value: 'Year-end appraisal', label: 'Year-end appraisal' },
+                          { value: 'Probation review', label: 'Probation review' },
+                          { value: 'H2 performance review', label: 'H2 performance review' },
+                        ]}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1.5">Linked categories to evaluate</label>
+                      <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-2">
+                        {[
+                          'Technical skills (Attribute · 25%)',
+                          'Communication (Attribute · 15%)',
+                          'Leadership (Competency · 20%)',
+                          'Project delivery (KPI · 30%)',
+                          'Attendance (Attendance KPI · 10%)'
+                        ].map((cat, i) => (
+                          <div key={i} className="flex items-center gap-2 text-xs">
+                            <input
+                              type="checkbox"
+                              id={`stp-lnk-cat-${i}`}
+                              defaultChecked={stpCategories.includes(cat)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setStpCategories([...stpCategories, cat]);
+                                } else {
+                                  setStpCategories(stpCategories.filter(x => x !== cat));
+                                }
+                              }}
+                              className="h-3.5 w-3.5 rounded border-slate-300"
+                            />
+                            <label htmlFor={`stp-lnk-cat-${i}`} className="text-slate-600 font-semibold cursor-pointer">{cat}</label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3.5 border-t pt-3">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Appraiser notes</label>
+                        <SelectMenu
+                          value={stpAppraiserNote}
+                          onChange={setStpAppraiserNote}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Yes', label: 'Yes' },
+                            { value: 'No', label: 'No' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Career objectives</label>
+                        <SelectMenu
+                          value={stpCareerEnabled}
+                          onChange={setStpCareerEnabled}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Yes', label: 'Yes' },
+                            { value: 'No', label: 'No' },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveSetup}
+                      className="w-full py-2.5 bg-novora text-white rounded-xl font-bold cursor-pointer hover:bg-blue-700 transition"
+                    >
+                      Publish Configuration Setup
+                    </button>
+                  </div>
+                )}
+
+                {/* 7. GRANT PERMISSIONS MODALS */}
+                {activeModal === 'grant_permission' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Evaluator / primary appraiser</label>
+                      <SelectMenu
+                        value={prmEvaluator}
+                        onChange={setPrmEvaluator}
+                        triggerClassName="text-xs font-bold"
+                        placeholder={(employees || []).length > 0 ? 'Select evaluator' : 'No employees available'}
+                        options={(employees || []).map((emp) => ({ value: emp.name, label: emp.name }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Evaluation framework type</label>
+                      <SelectMenu
+                        value={prmType}
+                        onChange={setPrmType}
+                        triggerClassName="text-xs font-bold"
+                        options={[
+                          { value: 'Year-end appraisal', label: 'Year-end appraisal' },
+                          { value: 'Probation review', label: 'Probation review' },
+                          { value: 'Mid-year review', label: 'Mid-year review' },
+                        ]}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Access valid from</label>
+                        <input
+                          type="text"
+                          value={prmFrom}
+                          onChange={(e) => setPrmFrom(e.target.value)}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Access valid to</label>
+                        <input
+                          type="text"
+                          value={prmTo}
+                          onChange={(e) => setPrmTo(e.target.value)}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Status</label>
+                      <SelectMenu
+                        value={prmStatus}
+                        onChange={setPrmStatus}
+                        triggerClassName="text-xs font-bold"
+                        options={[
+                          { value: 'Active', label: 'Active' },
+                          { value: 'Draft', label: 'Draft' },
+                        ]}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSavePermission}
+                      className="w-full py-2.5 bg-novora text-white rounded-xl font-bold cursor-pointer hover:bg-blue-700 transition"
+                    >
+                      Authorize Evaluator Clearance
+                    </button>
+                  </div>
+                )}
+
+                {/* 8. VIEW LIST OVERLAY MODAL */}
+                {activeModal === 'view_list' && permissionViewItem && (
+                  <div className="space-y-4">
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center justify-between">
+                      <div>
+                        <span className="block text-[10px] uppercase font-black text-slate-400">Review Authorization</span>
+                        <h4 className="text-sm font-extrabold text-slate-800">{permissionViewItem.evaluator}</h4>
+                      </div>
+                      <span className="bg-blue-50 text-novora border border-blue-100 px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider">
+                        {permissionViewItem.type}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] uppercase font-black text-slate-400 tracking-wider mb-2">
+                        Assigned Employee Roster ({permissionViewItem.details.length})
+                      </span>
+                      <div className="border rounded-xl divide-y bg-white max-h-[250px] overflow-y-auto">
+                        {permissionViewItem.details.map((emp, idx) => (
+                          <div key={idx} className="p-3 font-semibold flex items-center justify-between hover:bg-slate-50/35">
+                            <span className="text-slate-800">{emp}</span>
+                            <span className="text-emerald-600 font-bold flex items-center gap-1 text-[10.5px]">
+                              ● Authorized
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveModal(null)}
+                      className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-bold transition"
+                    >
+                      Dismiss View list
+                    </button>
+                  </div>
+                )}
+
+                {/* 9. COMPETENCY MODALS */}
+                {(activeModal === 'competency_new' || activeModal === 'competency_edit') && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Competency / Skill name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Communication, Technical proficiency"
+                        value={compName}
+                        onChange={(e) => setCompName(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Competency type</label>
+                        <SelectMenu
+                          value={compType}
+                          onChange={(v) => { setCompType(v); if (v === 'Competency') setCompParent('—'); }}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Competency', label: 'Competency' },
+                            { value: 'Sub-comp.', label: 'Sub-comp.' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Parent category Group</label>
+                        <SelectMenu
+                          value={compParent}
+                          onChange={setCompParent}
+                          disabled={compType === 'Competency'}
+                          triggerClassName="text-xs font-bold bg-slate-50"
+                          options={[
+                            { value: '—', label: '—' },
+                            { value: 'Leadership', label: 'Leadership' },
+                            { value: 'Problem solving', label: 'Problem solving' },
+                            { value: 'Adaptability', label: 'Adaptability' },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Definition & Criteria</label>
+                      <textarea
+                        rows={3}
+                        placeholder="Define standard behavioral indicators and rating keys..."
+                        value={compDef}
+                        onChange={(e) => setCompDef(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none resize-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveCompetency}
+                      className="w-full py-2.5 bg-novora text-white rounded-xl font-bold cursor-pointer hover:bg-blue-700 transition"
+                    >
+                      Save Competency Criteria
+                    </button>
+                  </div>
+                )}
+
+                {/* 9. NEW EVALUATION MODAL */}
+                {activeModal === 'evaluation_new' && (
+                  <div className="space-y-4 animate-in fade-in duration-200">
+                    <div className="bg-blue-50/40 p-3.5 border border-blue-100 rounded-2xl">
+                      <p className="text-[11px] text-novora font-semibold">
+                        Initiate a brand new performance evaluation workstation record. You can select any employee and specify initial scorecard attribute scores.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Select Employee *</label>
+                      <SelectMenu
+                        value={evalEmpId}
+                        onChange={setEvalEmpId}
+                        preferUp
+                        triggerClassName="w-full text-xs border rounded-xl bg-white"
+                        placeholder={(employees || []).length > 0 ? 'Select employee' : 'No employees available'}
+                        options={(employees || []).map((emp) => ({
+                          value: emp.id,
+                          label: `${emp.name} (${emp.id}) — ${emp.department ?? ''}`,
+                        }))}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Review Type *</label>
+                        <SelectMenu
+                          value={evalReviewType}
+                          onChange={setEvalReviewType}
+                          triggerClassName="text-xs font-bold"
+                          options={[
+                            { value: 'Year-end appraisal', label: 'Year-end appraisal' },
+                            { value: 'Mid-year appraisal', label: 'Mid-year appraisal' },
+                            { value: 'Probation review', label: 'Probation review' },
+                            { value: '360 Performance Review', label: '360 Performance Review' },
+                          ]}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Review Period *</label>
+                        <input
+                          type="text"
+                          placeholder={`e.g. Jan–Dec ${currentYear}`}
+                          value={evalReviewPeriod}
+                          onChange={(e) => setEvalReviewPeriod(e.target.value)}
+                          className="w-full text-xs p-2.5 border rounded-xl outline-none text-slate-700 bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] uppercase text-slate-400 font-bold block mb-1">Review Date *</label>
+                      <input
+                        type="date"
+                        value={evalReviewDate}
+                        onChange={(e) => setEvalReviewDate(e.target.value)}
+                        className="w-full text-xs p-2.5 border rounded-xl outline-none text-slate-700 bg-white"
+                      />
+                    </div>
+
+                    <div className="border-t border-slate-100 pt-3 space-y-3">
+                      <span className="text-[10px] font-black uppercase text-slate-400 block tracking-wider">Initial Attribute Scores (1-5 Scale)</span>
+                      
+                      <div className="grid grid-cols-3 gap-2.5 text-xs">
+                        <div>
+                          <label className="block text-[9.5px] text-slate-500 mb-1 font-bold">Code Quality</label>
+                          <SelectMenu
+                            value={String(evalCodeQuality)}
+                            onChange={(v) => setEvalCodeQuality(Number(v))}
+                            preferUp
+                            triggerClassName="w-full p-2 border rounded-lg bg-white font-bold"
+                            options={[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: String(n) }))}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9.5px] text-slate-500 mb-1 font-bold">Problem Solving</label>
+                          <SelectMenu
+                            value={String(evalProblemSolving)}
+                            onChange={(v) => setEvalProblemSolving(Number(v))}
+                            preferUp
+                            triggerClassName="w-full p-2 border rounded-lg bg-white font-bold"
+                            options={[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: String(n) }))}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9.5px] text-slate-500 mb-1 font-bold">System Design</label>
+                          <SelectMenu
+                            value={String(evalSystemDesign)}
+                            onChange={(v) => setEvalSystemDesign(Number(v))}
+                            preferUp
+                            triggerClassName="w-full p-2 border rounded-lg bg-white font-bold"
+                            options={[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: String(n) }))}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2.5 text-xs border-t border-slate-100 pt-3">
+                      <div>
+                        <label className="block text-[9.5px] text-slate-500 mb-1 font-bold">Sprints Completed</label>
+                        <input
+                          type="number"
+                          value={evalSprintsCompleted}
+                          onChange={(e) => setEvalSprintsCompleted(Number(e.target.value))}
+                          className="w-full p-2 border rounded-lg outline-none font-bold text-slate-700 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[9.5px] text-slate-500 mb-1 font-bold">Bugs SLA %</label>
+                        <input
+                          type="number"
+                          value={evalBugsSLA}
+                          onChange={(e) => setEvalBugsSLA(Number(e.target.value))}
+                          className="w-full p-2 border rounded-lg outline-none font-bold text-slate-700 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[9.5px] text-slate-500 mb-1 font-bold">Attendance %</label>
+                        <input
+                          type="text"
+                          value={evalAttendance}
+                          onChange={(e) => setEvalAttendance(e.target.value)}
+                          className="w-full p-2 border rounded-lg outline-none font-bold text-slate-700 bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCreateEvaluation}
+                      className="w-full py-2.5 bg-novora text-white rounded-xl font-bold cursor-pointer hover:bg-blue-700 transition mt-2"
+                    >
+                      Establish Evaluation Workstation
+                    </button>
+                  </div>
+                )}
+
+                {/* 10. REVIEW DOSSIER VIEW MODAL */}
+                {activeModal === 'view_report' && reportDetailItem && (
+                  <div className="space-y-4">
+                    <div className="border bg-slate-50/50 rounded-2xl p-4 space-y-3.5">
+                      <div className="flex items-center justify-between pb-2 border-b border-white">
+                        <div>
+                          <span className="text-[9.5px] uppercase font-black text-slate-400">Employee dossier review card</span>
+                          <h4 className="text-sm font-black text-slate-800">{reportDetailItem.name}</h4>
+                        </div>
+                        <span className={`px-3 py-0.5 border font-semibold text-xs rounded-md ${reportDetailItem.gradeColor}`}>
+                          Grade {reportDetailItem.grade}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-xs font-semibold text-slate-600">
+                        <div>
+                          <span className="block text-[9px] uppercase font-bold text-slate-400">Framework type</span>
+                          <p className="text-slate-800">{reportDetailItem.type}</p>
+                        </div>
+                        <div>
+                          <span className="block text-[9px] uppercase font-bold text-slate-400">Review period</span>
+                          <p className="text-slate-800 font-mono">{reportDetailItem.period}</p>
+                        </div>
+                        <div>
+                          <span className="block text-[9px] uppercase font-bold text-slate-400">Appraiser manager</span>
+                          <p className="text-slate-800">{reportDetailItem.appraiser}</p>
+                        </div>
+                        <div>
+                          <span className="block text-[9px] uppercase font-bold text-slate-400">Status</span>
+                          <span className={`${reportDetailItem.status === 'Completed' ? 'text-emerald-600' : 'text-amber-600'} font-bold text-[11px]`}>{reportDetailItem.status}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <span className="text-[10px] font-black uppercase text-slate-400 block pb-1 tracking-wider">Score matrix parameters</span>
+                      {[
+                        { label: 'Technical Skills (Attribute weight)', value: `${reportDetailItem.attr}/100` },
+                        { label: 'Project Delivery (KPI metrics success)', value: `${reportDetailItem.kpi}/100` },
+                        { label: 'Leadership Qualities (Competency appraisal)', value: `${reportDetailItem.comp}/100` },
+                        { label: 'Attendance KPI Score', value: `${reportDetailItem.attend}/100` }
+                      ].map((item, i) => (
+                        <div key={i} className="flex justify-between items-center p-2 border border-slate-100 rounded-xl bg-white text-xs font-semibold text-slate-700">
+                          <span>{item.label}</span>
+                          <span className="font-mono font-bold text-slate-900">{item.value}</span>
+                        </div>
+                      ))}
+
+                      <div className="flex justify-between items-center p-3 bg-blue-50/50 border border-blue-100 rounded-xl text-xs font-bold text-blue-800 mt-2">
+                        <span>Total Weighted Performance Score</span>
+                        <span className="font-mono text-sm font-black">{reportDetailItem.total} / 100</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2.5 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => window.print()}
+                        className="flex-1 py-2 bg-novora text-white rounded-xl text-xs font-bold hover:bg-blue-700 cursor-pointer"
+                      >
+                        Print EA certificate
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveModal(null)}
+                        className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold cursor-pointer"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}

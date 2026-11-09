@@ -1,0 +1,520 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useParams, useRouter } from 'next/navigation'
+import Sidebar from '@/components/layout/Sidebar'
+import Topbar from '@/components/layout/Topbar'
+import { dateStamp, downloadCsv } from '@/lib/csv'
+import {
+  AddEmployeeModal,
+  EmployeeDirectoryTab,
+  EmployeeProfileTab,
+  EmployeeReportsTab,
+  OrgChartTab,
+} from '@/features/employees'
+import { DashboardTab } from '@/features/dashboard'
+import { AttendanceTab } from '@/features/attendance'
+import { LeaveTab } from '@/features/leave'
+import { PayrollTab } from '@/features/payroll'
+import { ClaimsTab } from '@/features/claims'
+import { BenefitsTab } from '@/features/benefits'
+import { HelpdeskTab } from '@/features/helpdesk'
+import { PerformanceTab } from '@/features/performance'
+import { EngagementTab } from '@/features/engagement'
+import { TrainingTab } from '@/features/training'
+import { LearningTab } from '@/features/learning'
+import { AssetsTab } from '@/features/assets'
+import { DisciplinaryTab } from '@/features/disciplinary'
+import { OnOffBoardingTab } from '@/features/onboarding'
+import { RecruitmentTab } from '@/features/recruitment'
+import { ReportsTab } from '@/features/reports'
+import { SettingsTab } from '@/features/settings'
+import { useAuth } from '@/providers/AuthProvider'
+import { ApiError, deleteEmployee, updateEmployee } from '@/services'
+import type { SidebarTab, SubTab, Employee } from '@/types'
+import {
+  canAccessPortal,
+  canAccessTab,
+  canManageFullSystem,
+  defaultTabFor,
+  parsePortalId,
+  portalHomePath,
+  portalPath,
+  slugToTab,
+} from '@/lib/roles'
+import { BookOpen, ChevronDown, Download, FileSpreadsheet, FileText } from 'lucide-react'
+import { DropdownAnchor } from '@/components/ui'
+import { SETTINGS_NAV_SECTIONS } from '@/lib/sidebarNav'
+
+const ALLOWED_SETTINGS_TABS = new Set(
+  SETTINGS_NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.name)),
+)
+
+export default function PortalShell() {
+  const params = useParams<{ portal: string; module?: string }>()
+  const portalParam = params.portal
+  const moduleParam = params.module
+  const router = useRouter()
+  const {
+    authReady,
+    session,
+    employees,
+    setEmployees,
+    selectedEmployee,
+    setSelectedEmployee,
+    addToast,
+    handleLogout,
+    loadEmployees,
+  } = useAuth()
+
+  const [activeSubTab, setActiveSubTab] = useState<SubTab>('Employee Profile')
+  const [reportsSubTab, setReportsSubTab] = useState<'centre' | 'scheduled' | 'builder'>('centre')
+  const [settingsSubTab, setSettingsSubTab] = useState<string>('Company profile')
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [searchValue, setSearchValue] = useState('')
+  const [exportDropdownOpen, setExportDropdownOpen] = useState(false)
+  const [deptFilterState, setDeptFilterState] = useState<string>('All departments')
+  const [deptDropdownOpen, setDeptDropdownOpen] = useState(false)
+
+  const portal = parsePortalId(portalParam)
+  const tabFromSlug = slugToTab(moduleParam ?? 'dashboard')
+  const requestedTab = tabFromSlug ?? (session ? defaultTabFor(session.roles) : 'Dashboard')
+  const activeTab: SidebarTab =
+    session && canAccessTab(session.roles, requestedTab)
+      ? requestedTab
+      : session
+        ? defaultTabFor(session.roles)
+        : 'Dashboard'
+
+  useEffect(() => {
+    if (!ALLOWED_SETTINGS_TABS.has(settingsSubTab)) {
+      setSettingsSubTab('Company profile')
+    }
+  }, [settingsSubTab])
+
+  useEffect(() => {
+    if (reportsSubTab !== 'centre') {
+      setReportsSubTab('centre')
+    }
+  }, [reportsSubTab])
+
+  useEffect(() => {
+    if (!authReady) return
+    if (!session) {
+      router.replace('/login')
+      return
+    }
+    if (!portal || !canAccessPortal(session.roles, portal)) {
+      router.replace(portalHomePath(session.roles))
+      return
+    }
+    if (!moduleParam || !tabFromSlug || activeTab !== requestedTab) {
+      router.replace(portalPath(portal, activeTab))
+    }
+  }, [
+    authReady,
+    session,
+    portal,
+    moduleParam,
+    tabFromSlug,
+    activeTab,
+    requestedTab,
+    router,
+  ])
+
+  if (!authReady || !session || !portal || !canAccessPortal(session.roles, portal)) {
+    return null
+  }
+
+  if (!moduleParam || !tabFromSlug || activeTab !== requestedTab) {
+    return null
+  }
+
+  const goToTab = (tab: SidebarTab) => {
+    if (!canAccessTab(session.roles, tab)) {
+      addToast('That module is limited to Admin and HR roles.', 'info')
+      return
+    }
+    router.push(portalPath(portal, tab))
+  }
+
+  const handleAddEmployee = (newEmp: Employee) => {
+    if (!canManageFullSystem(session.roles)) {
+      addToast('Only Admin or HR can add employees.', 'error')
+      return
+    }
+    setEmployees((prev) => {
+      const withoutDup = prev.filter((e) => e.apiId !== newEmp.apiId && e.id !== newEmp.id)
+      return [newEmp, ...withoutDup]
+    })
+    setSelectedEmployee(newEmp)
+    setActiveSubTab('Employee Profile')
+    router.push(portalPath(portal, 'Employees Management'))
+    void loadEmployees(session.roles)
+  }
+
+  const handleSelectEmployee = (emp: Employee) => {
+    setSelectedEmployee(emp)
+    setActiveSubTab('Employee Profile')
+    addToast(`Switched active profile view to ${emp.name}`, 'info')
+  }
+
+  const triggerExport = (format: 'Excel' | 'CSV' | 'PDF') => {
+    setExportDropdownOpen(false)
+    if (format === 'PDF') {
+      window.print()
+      return
+    }
+    const ok = downloadCsv(
+      `novora_employees_${dateStamp()}`,
+      ['Employee ID', 'Name', 'Department', 'Position', 'Employment status', 'Status', 'Join date', 'Email', 'Mobile'],
+      employees.map((e) => [e.id, e.name, e.department, e.position, e.employmentStatus, e.status, e.joinDate, e.email, e.mobile]),
+    )
+    addToast(ok ? `Exported ${employees.length} employees as CSV.` : 'No employees to export yet.', ok ? 'success' : 'info')
+  }
+
+  const handleSubTabChange = (tab: SubTab) => setActiveSubTab(tab)
+
+  const filteredByDepartmentDropdown = (dept: string) => {
+    setDeptFilterState(dept)
+    setDeptDropdownOpen(false)
+    if (dept === 'All departments') {
+      addToast('Showing employees across all departments', 'info')
+    } else {
+      addToast(`Filtered layout to show only ${dept}`, 'info')
+    }
+  }
+
+  return (
+    <div
+      id="novora-hrms-root"
+      className="flex h-dvh min-h-0 select-none font-sans overflow-hidden"
+    >
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={goToTab}
+        roles={session.roles}
+        settingsSubTab={settingsSubTab}
+        setSettingsSubTab={setSettingsSubTab}
+      />
+
+      <main id="main-portal-contents" className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <Topbar
+          activeTabName={activeTab}
+          searchValue={searchValue}
+          onSearchChange={setSearchValue}
+          addToast={addToast}
+          session={session}
+          onLogout={handleLogout}
+          employees={employees}
+          onNavigate={goToTab}
+          onSelectEmployee={(emp) => {
+            setSelectedEmployee(emp)
+            setActiveSubTab('Employee Profile')
+            goToTab('Employees Management')
+          }}
+        />
+
+        <div
+          id="portal-inner-board"
+          key={activeTab}
+          className="flex-1 min-h-0 overflow-y-auto animate-portal-content-in"
+        >
+          {!canAccessTab(session.roles, activeTab) ? null : activeTab === 'Employees Management' ? (
+            <div id="employees-module-root" className="space-y-6">
+              <div
+                id="employees-module-header"
+                className="nv-card flex flex-col xl:flex-row xl:items-center justify-between px-4 py-1.5 gap-3"
+              >
+                <div id="employees-navigation-tabs" className="flex items-center gap-2 select-none min-w-0 overflow-x-auto">
+                  {(
+                    [
+                      'Employee Profile',
+                      'Employee Directory',
+                      'Organisation Chart',
+                      'Employee Reports',
+                    ] as SubTab[]
+                  ).map((tab) => {
+                    const isActive = activeSubTab === tab
+                    return (
+                      <button
+                        id={`tab-${tab.replace(/\s+/g, '-').toLowerCase()}`}
+                        key={tab}
+                        onClick={() => handleSubTabChange(tab)}
+                        className={`text-sm font-semibold px-4.5 py-2.5 rounded-xl transition-all relative cursor-pointer whitespace-nowrap shrink-0 ${
+                          isActive
+                            ? 'bg-blue-50 text-novora'
+                            : 'text-slate-600 hover:text-slate-950 hover:bg-slate-50'
+                        }`}
+                      >
+                        {tab}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div
+                  id="employees-top-controls"
+                  className="flex items-center gap-3 self-end xl:self-auto relative shrink-0 flex-nowrap"
+                >
+                  <DropdownAnchor
+                    open={deptDropdownOpen}
+                    onClose={() => setDeptDropdownOpen(false)}
+                    align="right"
+                  >
+                    <button
+                      id="dept-filter-btn"
+                      type="button"
+                      aria-expanded={deptDropdownOpen}
+                      onClick={() => {
+                        setExportDropdownOpen(false)
+                        setDeptDropdownOpen(!deptDropdownOpen)
+                      }}
+                      className={`nv-dd-trigger ${deptDropdownOpen ? 'nv-dd-trigger--open' : ''}`}
+                    >
+                      <span>{deptFilterState}</span>
+                      <ChevronDown className="nv-chevron-down nv-chevron-down--md" />
+                    </button>
+
+                    {deptDropdownOpen ? (
+                      <div
+                        id="dept-dropdown-menu"
+                        className="nv-dropdown-menu w-48"
+                      >
+                        {['All departments', 'Engineering', 'Finance', 'HR', 'Marketing', 'Operations'].map(
+                          (dept) => (
+                            <button
+                              key={dept}
+                              type="button"
+                              aria-selected={deptFilterState === dept}
+                              onClick={() => filteredByDepartmentDropdown(dept)}
+                              className={deptFilterState === dept ? 'nv-dropdown-item--active' : ''}
+                            >
+                              {dept}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                    ) : null}
+                  </DropdownAnchor>
+
+                  <DropdownAnchor
+                    open={exportDropdownOpen}
+                    onClose={() => setExportDropdownOpen(false)}
+                    align="right"
+                  >
+                    <button
+                      id="export-options-btn"
+                      type="button"
+                      aria-expanded={exportDropdownOpen}
+                      onClick={() => {
+                        setDeptDropdownOpen(false)
+                        setExportDropdownOpen(!exportDropdownOpen)
+                      }}
+                      className={`nv-dd-trigger ${exportDropdownOpen ? 'nv-dd-trigger--open' : ''}`}
+                    >
+                      <Download className="h-3.5 w-3.5 text-slate-500" />
+                      <span>Export</span>
+                      <ChevronDown className="nv-chevron-down nv-chevron-down--md" />
+                    </button>
+
+                    {exportDropdownOpen ? (
+                      <div
+                        id="export-dropdown-items"
+                        className="nv-dropdown-menu w-44"
+                      >
+                        <div className="px-2.5 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100 mb-0.5">
+                          Export Settings
+                        </div>
+                        <button
+                          id="export-excel-item"
+                          type="button"
+                          onClick={() => triggerExport('Excel')}
+                        >
+                          <FileSpreadsheet className="h-4 w-4 text-emerald-500 shrink-0" strokeWidth={2} />
+                          <span>Export as Excel</span>
+                        </button>
+                        <button
+                          id="export-csv-item"
+                          type="button"
+                          onClick={() => triggerExport('CSV')}
+                        >
+                          <FileText className="h-4 w-4 text-blue-500 shrink-0" strokeWidth={2} />
+                          <span>Export as CSV</span>
+                        </button>
+                        <button
+                          id="export-pdf-item"
+                          type="button"
+                          onClick={() => triggerExport('PDF')}
+                        >
+                          <BookOpen className="h-4 w-4 text-rose-500 shrink-0" strokeWidth={2} />
+                          <span>Export as PDF</span>
+                        </button>
+                      </div>
+                    ) : null}
+                  </DropdownAnchor>
+                </div>
+              </div>
+
+              <div id="active-sub-tab-stage">
+                {activeSubTab === 'Employee Profile' && (
+                  <EmployeeProfileTab
+                    employee={selectedEmployee}
+                    employees={employees}
+                    onBackToDirectory={() => handleSubTabChange('Employee Directory')}
+                    onDeleteEmployee={(id) => {
+                      void (async () => {
+                        const target = employees.find((e) => e.id === id || e.apiId === id)
+                        const apiId = target?.apiId
+                        if (!apiId) {
+                          addToast('This employee has no server id and cannot be deleted.', 'error')
+                          return
+                        }
+                        try {
+                          await deleteEmployee(apiId)
+                          const nextEmps = employees.filter((e) => e.apiId !== apiId && e.id !== id)
+                          setEmployees(nextEmps)
+                          setSelectedEmployee(nextEmps[0] || null)
+                          handleSubTabChange('Employee Directory')
+                          addToast('Employee deleted.', 'success')
+                          void loadEmployees(session.roles)
+                        } catch (err) {
+                          addToast(
+                            err instanceof ApiError ? err.message : 'Could not delete employee.',
+                            'error',
+                          )
+                        }
+                      })()
+                    }}
+                    onUpdateEmployee={(updatedEmp) => {
+                      void (async () => {
+                        const apiId = updatedEmp.apiId
+                        if (!apiId || !updatedEmp.departmentId || !updatedEmp.positionId) {
+                          setEmployees((prev) =>
+                            prev.map((e) => (e.id === updatedEmp.id ? updatedEmp : e)),
+                          )
+                          setSelectedEmployee(updatedEmp)
+                          return
+                        }
+                        try {
+                          const parts = updatedEmp.name.trim().split(/\s+/)
+                          const firstName = parts[0] || 'Employee'
+                          const lastName = parts.slice(1).join(' ') || 'Staff'
+                          const saved = await updateEmployee(apiId, {
+                            firstName,
+                            lastName,
+                            email: updatedEmp.email,
+                            departmentId: updatedEmp.departmentId,
+                            positionId: updatedEmp.positionId,
+                            employeeCode: updatedEmp.id,
+                            status: updatedEmp.status === 'Inactive' ? 'inactive' : 'active',
+                          })
+                          setEmployees((prev) =>
+                            prev.map((e) => (e.apiId === apiId || e.id === updatedEmp.id ? saved : e)),
+                          )
+                          setSelectedEmployee(saved)
+                          addToast('Employee updated on server.', 'success')
+                        } catch (err) {
+                          addToast(
+                            err instanceof ApiError ? err.message : 'Could not update employee.',
+                            'error',
+                          )
+                        }
+                      })()
+                    }}
+                    addToast={addToast}
+                  />
+                )}
+
+                {activeSubTab === 'Employee Directory' && (
+                  <EmployeeDirectoryTab
+                    employees={employees.filter(
+                      (emp) =>
+                        deptFilterState === 'All departments' || emp.department === deptFilterState,
+                    )}
+                    onSelectEmployee={handleSelectEmployee}
+                    onOpenAddModal={() => setIsAddModalOpen(true)}
+                    searchValue={searchValue}
+                    onSearchValueChange={setSearchValue}
+                  />
+                )}
+
+                {activeSubTab === 'Organisation Chart' && (
+                  <OrgChartTab
+                    employees={employees}
+                    onSelectEmployee={handleSelectEmployee}
+                    addToast={addToast}
+                  />
+                )}
+
+                {activeSubTab === 'Employee Reports' && (
+                  <EmployeeReportsTab employees={employees} addToast={addToast} />
+                )}
+              </div>
+            </div>
+          ) : activeTab === 'Dashboard' ? (
+            <DashboardTab
+              employees={employees}
+              setActiveSidebarTab={goToTab}
+              addToast={addToast}
+              roles={session.roles}
+              userName={session.fullName || session.email}
+            />
+          ) : activeTab === 'On/Off-boarding Management' ? (
+            <OnOffBoardingTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Benefits Management' ? (
+            <BenefitsTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Helpdesk & Inquiries Management' ? (
+            <HelpdeskTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Engagement Management' ? (
+            <EngagementTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Learning Management' ? (
+            <LearningTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Training Management' ? (
+            <TrainingTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Assets Management' ? (
+            <AssetsTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Recruitment Management' ? (
+            <RecruitmentTab addToast={addToast} onAddEmployeeAsRecord={handleAddEmployee} employees={employees} />
+          ) : activeTab === 'Attendance Management' ? (
+            <AttendanceTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Leave Management' ? (
+            <LeaveTab employees={employees} addToast={addToast} roles={session.roles} />
+          ) : activeTab === 'Disciplinary Management' ? (
+            <DisciplinaryTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Payroll Management' ? (
+            <PayrollTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Claims Management' ? (
+            <ClaimsTab employees={employees} addToast={addToast} roles={session.roles} />
+          ) : activeTab === 'Performance Management' ? (
+            <PerformanceTab employees={employees} addToast={addToast} />
+          ) : activeTab === 'Reports' ? (
+            <ReportsTab
+              employees={employees}
+              addToast={addToast}
+              activeSubTab={reportsSubTab}
+              setActiveSubTab={(tab) => setReportsSubTab(tab as 'centre' | 'scheduled' | 'builder')}
+            />
+          ) : activeTab === 'Settings' ? (
+            <SettingsTab
+              employees={employees}
+              addToast={addToast}
+              activeSubTab={settingsSubTab}
+              setActiveSubTab={setSettingsSubTab}
+            />
+          ) : null}
+        </div>
+      </main>
+
+      {canManageFullSystem(session.roles) && (
+        <AddEmployeeModal
+          isOpen={isAddModalOpen}
+          onClose={() => setIsAddModalOpen(false)}
+          onAddEmployee={handleAddEmployee}
+          addToast={addToast}
+          employees={employees}
+        />
+      )}
+    </div>
+  )
+}

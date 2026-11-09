@@ -1,0 +1,288 @@
+import React, { useCallback, useEffect, useState } from 'react'
+import {
+  Bell,
+  ChevronDown,
+  LogOut,
+  User,
+  ShieldCheck,
+  Briefcase,
+} from 'lucide-react'
+import type { AuthSession, Employee, SidebarTab } from '@/types'
+import GlobalSearch from '@/components/layout/GlobalSearch'
+import { primaryRole, roleDisplayLabel } from '@/lib/roles'
+import { formatPersonDisplayName } from '@/lib/personName'
+import { DropdownAnchor } from '@/components/ui'
+import {
+  ApiError,
+  fetchMyNotifications,
+  markNotificationRead,
+  type NotificationRow,
+} from '@/services'
+
+interface TopbarProps {
+  activeTabName: string
+  onSearchChange?: (val: string) => void
+  searchValue?: string
+  addToast: (text: string, type: 'success' | 'info' | 'error' | 'loading') => void
+  session?: AuthSession | null
+  onLogout?: () => void | Promise<void>
+  employees?: Employee[]
+  onNavigate?: (tab: SidebarTab) => void
+  onSelectEmployee?: (emp: Employee) => void
+}
+
+type NotifyUi = { id: string; title: string; msg: string; time: string; read: boolean }
+
+function RoleIcon({ roles, className }: { roles: string[] | undefined; className?: string }) {
+  const raw = primaryRole(roles)
+  if (raw === 'SUPER_ADMIN' || raw === 'HR_ADMIN') {
+    return <ShieldCheck className={className} />
+  }
+  if (raw === 'HR_MANAGER' || raw === 'MANAGER') {
+    return <Briefcase className={className} />
+  }
+  return <User className={className} />
+}
+
+function relativeFrom(createdAt: string | null): string {
+  if (!createdAt) return '—'
+  const then = new Date(createdAt).getTime()
+  if (Number.isNaN(then)) return createdAt
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`
+  return new Date(createdAt).toLocaleDateString()
+}
+
+function mapNotification(row: NotificationRow): NotifyUi {
+  return {
+    id: row.id,
+    title: row.title,
+    msg: row.message,
+    time: relativeFrom(row.createdAt),
+    read: row.read,
+  }
+}
+
+export default function Topbar({
+  activeTabName,
+  onSearchChange,
+  searchValue = '',
+  addToast,
+  session,
+  onLogout,
+  employees = [],
+  onNavigate,
+  onSelectEmployee,
+}: TopbarProps) {
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [notifications, setNotifications] = useState<NotifyUi[]>([])
+
+  const displayName = formatPersonDisplayName(session?.fullName || session?.email?.split('@')[0])
+  const displayEmail = session?.email || ''
+  const displayRole = roleDisplayLabel(session?.roles)
+  const initial = displayName.trim().charAt(0).toUpperCase() || 'U'
+  const unreadCount = notifications.filter((n) => !n.read).length
+
+  const loadNotifications = useCallback(async () => {
+    try {
+      const rows = await fetchMyNotifications()
+      setNotifications(rows.map(mapNotification))
+    } catch (err) {
+      if (!(err instanceof ApiError) || (err.status !== 401 && err.status !== 403)) {
+        addToast('Could not load notifications.', 'error')
+      }
+    }
+  }, [addToast])
+
+  useEffect(() => {
+    void loadNotifications()
+  }, [loadNotifications])
+
+  useEffect(() => {
+    if (notificationsOpen) {
+      void loadNotifications()
+    }
+  }, [notificationsOpen, loadNotifications])
+
+  const handleNotificationClick = async (id: string, itemTitle: string) => {
+    try {
+      await markNotificationRead(id)
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
+      addToast(`Opened notification: "${itemTitle}"`, 'info')
+    } catch (err) {
+      addToast(err instanceof ApiError ? err.message : 'Could not mark notification read.', 'error')
+    }
+    setNotificationsOpen(false)
+  }
+
+  const handleMarkAllRead = async () => {
+    const unread = notifications.filter((n) => !n.read)
+    const results = await Promise.allSettled(unread.map((n) => markNotificationRead(n.id)))
+    const done = new Set(unread.filter((_, i) => results[i].status === 'fulfilled').map((n) => n.id))
+    setNotifications((prev) => prev.map((n) => (done.has(n.id) ? { ...n, read: true } : n)))
+    if (done.size < unread.length) addToast('Some notifications could not be marked read.', 'error')
+  }
+
+  return (
+    <header
+      id="app-topbar"
+      className="relative z-40 h-16 px-6 md:px-8 flex items-center justify-between gap-4 shrink-0"
+    >
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <h1
+          id="topbar-section-title"
+          className="text-base md:text-[19px] font-bold tracking-tight truncate"
+          title={activeTabName}
+        >
+          {activeTabName}
+        </h1>
+      </div>
+
+      <div className="flex items-center gap-3 md:gap-4 shrink-0">
+        <GlobalSearch
+          value={searchValue}
+          onChange={(val) => onSearchChange?.(val)}
+          roles={session?.roles}
+          employees={employees}
+          onNavigate={(tab) => onNavigate?.(tab)}
+          onSelectEmployee={(emp) => onSelectEmployee?.(emp)}
+        />
+
+        <DropdownAnchor
+          open={notificationsOpen}
+          onClose={() => setNotificationsOpen(false)}
+          align="right"
+        >
+          <button
+            id="topbar-notification-btn"
+            type="button"
+            onClick={() => {
+              setNotificationsOpen((open) => !open)
+              setProfileOpen(false)
+            }}
+            className="p-2.5 rounded-xl border border-[var(--shell-topbar-border)] hover:bg-[var(--sidebar-item-hover-bg)] transition-colors relative cursor-pointer"
+            aria-label="Notifications"
+            aria-expanded={notificationsOpen}
+          >
+            <Bell className="h-4.5 w-4.5 text-slate-600" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 h-5 min-w-5 px-1 bg-red-500 rounded-full text-white text-[10px] font-bold flex items-center justify-center border-2 border-white">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+
+          {notificationsOpen ? (
+            <div
+              id="topbar-notifications-dropdown"
+              className="nv-dropdown-menu w-80 nv-card shadow-xl py-2"
+            >
+              <div className="px-4 py-2.5 border-b border-slate-50 flex items-center justify-between">
+                <span className="font-bold text-slate-800 text-sm">Notifications</span>
+                <button
+                  type="button"
+                  className="text-[11px] text-novora font-semibold cursor-pointer hover:underline disabled:opacity-40 disabled:cursor-default disabled:no-underline"
+                  disabled={unreadCount === 0}
+                  onClick={() => void handleMarkAllRead()}
+                >
+                  Mark all as read
+                </button>
+              </div>
+              <div className="max-h-80 overflow-y-auto">
+                {notifications.length === 0 ? (
+                  <p className="px-4 py-6 text-xs text-slate-400 text-center">No notifications yet.</p>
+                ) : (
+                  notifications.map((n) => (
+                    <button
+                      key={n.id}
+                      type="button"
+                      onClick={() => void handleNotificationClick(n.id, n.title)}
+                      className={`w-full text-left px-4 py-2.5 hover:bg-slate-50 cursor-pointer transition-colors border-b border-slate-50/50 last:border-0 ${
+                        n.read ? '' : 'bg-novora/5'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-semibold text-xs text-slate-800">{n.title}</span>
+                        <span className="text-[10px] text-slate-400 shrink-0">{n.time}</span>
+                      </div>
+                      <p className="text-[11.5px] text-slate-500 mt-0.5 leading-relaxed truncate">{n.msg}</p>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : null}
+        </DropdownAnchor>
+
+        <DropdownAnchor
+          open={profileOpen}
+          onClose={() => setProfileOpen(false)}
+          align="right"
+        >
+          <button
+            id="topbar-profile-btn"
+            type="button"
+            onClick={() => {
+              setProfileOpen((open) => !open)
+              setNotificationsOpen(false)
+            }}
+            className="flex items-center gap-2.5 pl-2.5 pr-3.5 py-1.5 rounded-xl border border-[var(--shell-topbar-border)] hover:bg-[var(--sidebar-item-hover-bg)] transition-colors cursor-pointer"
+            title={displayRole}
+            aria-expanded={profileOpen}
+          >
+            <div className="h-7 w-7 bg-novora/10 border border-novora/20 rounded-lg flex items-center justify-center text-sm font-bold text-novora">
+              {initial}
+            </div>
+            <span className="text-xs font-bold text-[var(--shell-title)] tracking-tight max-w-28 truncate hidden xl:inline">
+              {displayName}
+            </span>
+            <RoleIcon roles={session?.roles} className="h-3.5 w-3.5 text-slate-500 shrink-0 hidden sm:block" />
+            <ChevronDown
+              className={`nv-chevron-down nv-chevron-down--md transition-transform ${profileOpen ? 'rotate-180' : ''}`}
+            />
+          </button>
+
+          {profileOpen ? (
+            <div
+              id="topbar-profile-dropdown"
+              className="nv-dropdown-menu w-56 nv-card shadow-xl py-1.5"
+            >
+              <div className="px-4 py-3 border-b border-slate-50">
+                <div className="font-bold text-xs text-slate-800 truncate">{displayName}</div>
+                <div className="flex items-center gap-1.5 mt-1 text-[10px] font-semibold text-slate-500">
+                  <RoleIcon roles={session?.roles} className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{displayRole}</span>
+                </div>
+                <div className="text-[10px] font-medium text-slate-400 truncate mt-1">{displayEmail}</div>
+                {session?.companyName && (
+                  <div className="text-[10px] font-semibold text-novora mt-1 truncate">
+                    {session.companyName}
+                  </div>
+                )}
+              </div>
+              <div className="border-t border-slate-50 my-1" />
+              <button
+                type="button"
+                className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors text-left cursor-pointer"
+                onClick={() => {
+                  setProfileOpen(false)
+                  void onLogout?.()
+                }}
+              >
+                <LogOut className="h-4 w-4" />
+                Sign Out
+              </button>
+            </div>
+          ) : null}
+        </DropdownAnchor>
+      </div>
+    </header>
+  )
+}
